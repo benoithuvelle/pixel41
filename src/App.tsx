@@ -10,7 +10,9 @@ import {
   JOINT_COLOR_STORAGE_KEY,
   MAX_PALETTE_COLORS,
   PALETTE_STORAGE_KEY,
-  WALL_STORAGE_KEY,
+  WALL_THICKNESS,
+  PIXEL_SIZE,
+  PIXEL_SIZE_CM,
 } from "./constants.ts";
 import "./App.css";
 import colors from "./colors.ts";
@@ -19,7 +21,7 @@ import Screen from "./Screen.tsx";
 const GRID_HEIGHT = 40;
 const GRID_WIDTH = 40;
 
-type Mode = "pixel" | "wall" | "joint";
+type Mode = "pixel" | "joint";
 
 function App() {
   const gridBase = Array.from({ length: GRID_HEIGHT }, () =>
@@ -58,16 +60,94 @@ function App() {
     pixels: gridBase,
   });
 
-  // Charger les murs depuis le localStorage au démarrage
-  const [walls, setWalls] = useState<Wall[]>(() => {
-    const saved = localStorage.getItem(WALL_STORAGE_KEY);
-    return saved ? JSON.parse(saved) : [];
-  });
+  // Murs hardcodés : pièce de 3m15 (315 cm) par 3m71 (371 cm)
+  const cmToPixels = (cm: number): number => {
+    return (cm / PIXEL_SIZE_CM) * PIXEL_SIZE;
+  };
 
-  // Sauvegarder les murs dans le localStorage à chaque changement
-  useEffect(() => {
-    localStorage.setItem(WALL_STORAGE_KEY, JSON.stringify(walls));
-  }, [walls]);
+  const ROOM_WIDTH_CM = 315; // 3m15
+  const ROOM_HEIGHT_CM = 371; // 3m71
+  const ROOM_WIDTH_PX = cmToPixels(ROOM_WIDTH_CM);
+  const ROOM_HEIGHT_PX = cmToPixels(ROOM_HEIGHT_CM);
+
+  // Escalier : profondeur 55 cm, longueur 100 cm, en bas à droite
+  const STAIR_DEPTH_CM = 55; // Profondeur depuis le mur de droite
+  const STAIR_LENGTH_CM = 100; // Longueur sur l'axe y depuis le bas
+  const STAIR_X_CM = ROOM_WIDTH_CM - STAIR_DEPTH_CM; // Position x (260 cm)
+  const STAIR_Y_CM = ROOM_HEIGHT_CM - STAIR_LENGTH_CM; // Position y depuis le haut (271 cm)
+
+  // Placard : au fond du couloir, vertical le long du mur de gauche
+  // En haut à gauche, contre le mur de gauche
+  const CLOSET_DEPTH_CM = 40; // Profondeur de 40 cm (largeur du placard)
+  const CLOSET_LENGTH_CM = 84; // Longueur de 60 cm le long du mur de gauche
+  const CLOSET_X_CM = WALL_THICKNESS / 2; // Commence après la moitié de l'épaisseur du mur gauche
+  const CLOSET_Y_CM = WALL_THICKNESS / 2; // Commence après la moitié de l'épaisseur du mur haut (en haut)
+
+  // Banquette : contre le deuxième mur intérieur (125 cm), vers l'escalier
+  const BENCH_LENGTH_CM = 125; // Longueur de 125 cm le long du mur
+  const BENCH_DEPTH_CM = 50; // Profondeur de 50 cm vers l'escalier
+  const BENCH_X_CM = 60 + 130; // Commence après le premier mur (60 cm) + 130 cm de vide = 190 cm
+  const BENCH_Y_CM = 98; // Au niveau du mur intérieur horizontal (98 cm du haut)
+
+  // Deuxième banquette : contre le mur de droite, entre la banquette existante et l'escalier
+  const BENCH2_DEPTH_CM = 50; // Profondeur de 50 cm (comme la première banquette)
+  const BENCH2_START_Y_CM = BENCH_Y_CM + BENCH_DEPTH_CM; // Commence après la fin de la première banquette
+  const BENCH2_END_Y_CM = STAIR_Y_CM; // Se termine au début de l'escalier
+  const BENCH2_LENGTH_CM = BENCH2_END_Y_CM - BENCH2_START_Y_CM; // Longueur calculée
+  const BENCH2_X_CM = ROOM_WIDTH_CM - BENCH2_DEPTH_CM; // Commence à 50 cm du mur de droite
+  const BENCH2_Y_CM = BENCH2_START_Y_CM; // Position y
+
+  // Créer les 4 murs de la pièce
+  const walls: Wall[] = [
+    // Mur bas (horizontal)
+    {
+      x1: 0,
+      y1: -WALL_THICKNESS / 2,
+      x2: ROOM_WIDTH_PX,
+      y2: WALL_THICKNESS / 2,
+      thickness: WALL_THICKNESS,
+    },
+    // Mur droite (vertical)
+    {
+      x1: ROOM_WIDTH_PX - WALL_THICKNESS / 2,
+      y1: 0,
+      x2: ROOM_WIDTH_PX + WALL_THICKNESS / 2,
+      y2: ROOM_HEIGHT_PX,
+      thickness: WALL_THICKNESS,
+    },
+    // Mur haut (horizontal)
+    {
+      x1: 0,
+      y1: ROOM_HEIGHT_PX - WALL_THICKNESS / 2,
+      x2: ROOM_WIDTH_PX,
+      y2: ROOM_HEIGHT_PX + WALL_THICKNESS / 2,
+      thickness: WALL_THICKNESS,
+    },
+    // Mur gauche (vertical)
+    {
+      x1: -WALL_THICKNESS / 2,
+      y1: 0,
+      x2: WALL_THICKNESS / 2,
+      y2: ROOM_HEIGHT_PX,
+      thickness: WALL_THICKNESS,
+    },
+    // Mur intérieur horizontal : 60 cm, part du mur gauche à 98 cm du haut
+    {
+      x1: WALL_THICKNESS / 2,
+      y1: cmToPixels(98) - WALL_THICKNESS / 2,
+      x2: cmToPixels(60) + WALL_THICKNESS / 2,
+      y2: cmToPixels(98) + WALL_THICKNESS / 2,
+      thickness: WALL_THICKNESS,
+    },
+    // Mur intérieur horizontal : part après 130 cm de vide après le premier mur, jusqu'au mur de droite
+    {
+      x1: cmToPixels(60 + 130) - WALL_THICKNESS / 2,
+      y1: cmToPixels(98) - WALL_THICKNESS / 2,
+      x2: ROOM_WIDTH_PX - WALL_THICKNESS / 2,
+      y2: cmToPixels(98) + WALL_THICKNESS / 2,
+      thickness: WALL_THICKNESS,
+    },
+  ];
 
   // Sauvegarder la couleur des joints dans le localStorage à chaque changement
   useEffect(() => {
@@ -97,18 +177,6 @@ function App() {
       height: GRID_SIZE,
       pixels: gridBase,
     });
-  }
-
-  function resetWalls() {
-    if (walls.length === 0) return;
-    if (
-      window.confirm(
-        "Êtes-vous sûr de vouloir effacer tous les murs ? Cette action est irréversible."
-      )
-    ) {
-      setWalls([]);
-      localStorage.removeItem(WALL_STORAGE_KEY);
-    }
   }
 
   function resetPalette() {
@@ -186,9 +254,26 @@ function App() {
         jointColor={jointColor}
         mode={mode}
         walls={walls}
-        setWalls={setWalls}
+        roomWidth={ROOM_WIDTH_PX}
+        roomHeight={ROOM_HEIGHT_PX}
+        stairX={cmToPixels(STAIR_X_CM)}
+        stairY={cmToPixels(STAIR_Y_CM)}
+        stairWidth={cmToPixels(STAIR_DEPTH_CM)}
+        stairHeight={cmToPixels(STAIR_LENGTH_CM)}
+        closetX={cmToPixels(CLOSET_X_CM)}
+        closetY={cmToPixels(CLOSET_Y_CM)}
+        closetWidth={cmToPixels(CLOSET_DEPTH_CM)}
+        closetHeight={cmToPixels(CLOSET_LENGTH_CM)}
+        benchX={cmToPixels(BENCH_X_CM) + WALL_THICKNESS / 2}
+        benchY={cmToPixels(BENCH_Y_CM) + WALL_THICKNESS / 2}
+        benchWidth={cmToPixels(BENCH_LENGTH_CM)}
+        benchHeight={cmToPixels(BENCH_DEPTH_CM)}
+        bench2X={cmToPixels(BENCH2_X_CM) - WALL_THICKNESS / 2}
+        bench2Y={cmToPixels(BENCH2_Y_CM) + WALL_THICKNESS / 2}
+        bench2Width={cmToPixels(BENCH2_DEPTH_CM)}
+        bench2Height={cmToPixels(BENCH2_LENGTH_CM)}
       />
-      <div className="w-100 flex flex-col items-center gap-y-2">
+      <div className="w-100 flex flex-col items-center gap-y-2 overflow-y-auto h-full">
         <div className="flex flex-row justify-between w-full">
           <div className="flex flex-col gap-2">
             {mode === "pixel" &&
@@ -210,9 +295,6 @@ function App() {
             <Button variant="outline" onClick={reset}>
               Reset Grille
             </Button>
-            <Button variant="outline" onClick={resetWalls}>
-              Reset Murs
-            </Button>
             {mode === "pixel" && (
               <Button variant="outline" onClick={resetPalette}>
                 Reset Palette
@@ -228,13 +310,6 @@ function App() {
             className={mode === "pixel" ? "bg-accent" : ""}
           >
             Pixel
-          </Button>
-          <Button
-            variant="outline"
-            onClick={() => setMode("wall")}
-            className={mode === "wall" ? "bg-accent" : ""}
-          >
-            Mur
           </Button>
           <Button
             variant="outline"
