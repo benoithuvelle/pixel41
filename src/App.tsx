@@ -3,6 +3,21 @@ import { Badge } from "./components/ui/badge.tsx";
 import { Button } from "./components/ui/button.tsx";
 import { Label } from "./components/ui/label.tsx";
 import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "./components/ui/card.tsx";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "./components/ui/dialog.tsx";
+import {
   ACTIVE_PALETTE_INDEX_KEY,
   // DEFAULT_FILL_COLOR,
   DEFAULT_STROKE_COLOR,
@@ -21,14 +36,31 @@ import Screen from "./Screen.tsx";
 const GRID_HEIGHT = 40;
 const GRID_WIDTH = 40;
 
-type Mode = "pixel" | "joint";
-
 function App() {
   const gridBase = Array.from({ length: GRID_HEIGHT }, () =>
     Array.from({ length: GRID_WIDTH }, () => ({
       paletteIndex: null,
     }))
   );
+
+  // État pour gérer la popup de nouveau projet
+  const [isInitialLoad, setIsInitialLoad] = useState<boolean>(() => {
+    const saved = localStorage.getItem(PALETTE_STORAGE_KEY);
+    return !saved || JSON.parse(saved).length === 0;
+  });
+  const [isNewProjectDialogOpen, setIsNewProjectDialogOpen] = useState<boolean>(
+    () => {
+      const saved = localStorage.getItem(PALETTE_STORAGE_KEY);
+      return !saved || JSON.parse(saved).length === 0;
+    }
+  );
+  const [tempPalette, setTempPalette] = useState<string[]>([]);
+  const [tempPaletteAction, setTempPaletteAction] = useState<
+    "none" | "add" | "update"
+  >("add");
+  const [tempUpdatePaletteIndex, setTempUpdatePaletteIndex] = useState<
+    number | null
+  >(null);
 
   // Palette de couleurs (jusqu'à 8 couleurs)
   const [palette, setPalette] = useState<string[]>(() => {
@@ -41,18 +73,13 @@ function App() {
       return saved !== null ? parseInt(saved, 10) : null;
     }
   );
-  const [paletteAction, setPaletteAction] = useState<"none" | "add" | "update">(
-    "none"
-  );
-  const [updatePaletteIndex, setUpdatePaletteIndex] = useState<number | null>(
-    null
-  );
 
   const [jointColor, setJointColor] = useState<string>(() => {
     const saved = localStorage.getItem(JOINT_COLOR_STORAGE_KEY);
     return saved || DEFAULT_STROKE_COLOR;
   });
-  const [mode, setMode] = useState<Mode>("pixel");
+  const [isJointColorDialogOpen, setIsJointColorDialogOpen] =
+    useState<boolean>(false);
 
   const [grid, setGrid] = useState<Grid>({
     width: GRID_SIZE,
@@ -171,270 +198,374 @@ function App() {
     }
   }, [activePaletteIndex]);
 
-  function reset() {
+  function handleNewProject() {
+    // Réinitialiser la grille
     setGrid({
       width: GRID_SIZE,
       height: GRID_SIZE,
       pixels: gridBase,
     });
+    // Réinitialiser la palette
+    setPalette([]);
+    setActivePaletteIndex(null);
+    setTempPalette([]);
+    setTempPaletteAction("add");
+    setTempUpdatePaletteIndex(null);
+    setIsInitialLoad(false); // Ce n'est plus le chargement initial
+    // Ouvrir la popup
+    setIsNewProjectDialogOpen(true);
   }
 
-  function resetPalette() {
-    if (palette.length === 0) return;
-    if (
-      window.confirm(
-        "Êtes-vous sûr de vouloir réinitialiser la palette ? Cette action est irréversible."
-      )
+  function handleOpenPaletteDialog() {
+    // Pré-remplir la palette temporaire avec la palette actuelle
+    setTempPalette([...palette]);
+    setTempPaletteAction("add");
+    setTempUpdatePaletteIndex(null);
+    setIsInitialLoad(false);
+    setIsNewProjectDialogOpen(true);
+  }
+
+  function handleTempColorClick(colorHex: string) {
+    if (tempPaletteAction === "add") {
+      if (tempPalette.length < MAX_PALETTE_COLORS) {
+        setTempPalette([...tempPalette, colorHex]);
+        setTempPaletteAction("add");
+      }
+    } else if (
+      tempPaletteAction === "update" &&
+      tempUpdatePaletteIndex !== null
     ) {
-      setPalette([]);
-      setActivePaletteIndex(null);
-      setPaletteAction("none");
-      localStorage.removeItem(PALETTE_STORAGE_KEY);
-      localStorage.removeItem(ACTIVE_PALETTE_INDEX_KEY);
+      const newTempPalette = [...tempPalette];
+      newTempPalette[tempUpdatePaletteIndex] = colorHex;
+      setTempPalette(newTempPalette);
+      setTempPaletteAction("add");
+      setTempUpdatePaletteIndex(null);
     }
   }
 
-  function addToPalette(color: string) {
-    if (palette.length < MAX_PALETTE_COLORS) {
-      setPalette([...palette, color]);
-      setActivePaletteIndex(palette.length);
-      setPaletteAction("none");
-    }
+  function handleRemoveFromTempPalette(index: number) {
+    setTempPalette(tempPalette.filter((_, i) => i !== index));
   }
 
-  function updatePaletteColor(index: number, color: string) {
-    const newPalette = [...palette];
-    newPalette[index] = color;
-    setPalette(newPalette);
-    setPaletteAction("none");
-    setUpdatePaletteIndex(null);
+  function handleValidatePalette() {
+    if (tempPalette.length === 0) {
+      alert("Veuillez ajouter au moins une couleur à la palette.");
+      return;
+    }
+    setPalette(tempPalette);
+    setActivePaletteIndex(0);
+    setIsInitialLoad(false);
+    setIsNewProjectDialogOpen(false);
   }
 
-  function removeFromPalette(index: number) {
-    const newPalette = palette.filter((_, i) => i !== index);
-    setPalette(newPalette);
-    // Mettre à jour les pixels qui utilisaient cette couleur
-    const newGrid = { ...grid };
-    for (const row of newGrid.pixels) {
-      for (const pixel of row) {
-        if (pixel.paletteIndex === index) {
-          pixel.paletteIndex = null;
-        } else if (pixel.paletteIndex !== null && pixel.paletteIndex > index) {
-          pixel.paletteIndex = pixel.paletteIndex - 1;
-        }
-      }
+  function handleDialogOpenChange(open: boolean) {
+    // Empêcher la fermeture si c'est le chargement initial et que la palette est vide
+    if (!open && isInitialLoad && tempPalette.length === 0) {
+      return;
     }
-    setGrid(newGrid);
-    if (activePaletteIndex === index) {
-      setActivePaletteIndex(null);
-    } else if (activePaletteIndex !== null && activePaletteIndex > index) {
-      setActivePaletteIndex(activePaletteIndex - 1);
-    }
+    setIsNewProjectDialogOpen(open);
   }
 
-  function handleColorClick(colorHex: string) {
-    if (mode === "joint") {
-      setJointColor(colorHex);
-    } else if (mode === "pixel") {
-      if (paletteAction === "add") {
-        addToPalette(colorHex);
-      } else if (paletteAction === "update" && updatePaletteIndex !== null) {
-        updatePaletteColor(updatePaletteIndex, colorHex);
-      }
-    }
+  function handleJointColorClick(colorHex: string) {
+    setJointColor(colorHex);
+    setIsJointColorDialogOpen(false);
   }
 
   return (
-    <div className="flex flex-row h-full gap-2">
-      <Screen
-        grid={grid}
-        setGrid={setGrid}
-        palette={palette}
-        activePaletteIndex={activePaletteIndex}
-        jointColor={jointColor}
-        mode={mode}
-        walls={walls}
-        roomWidth={ROOM_WIDTH_PX}
-        roomHeight={ROOM_HEIGHT_PX}
-        stairX={cmToPixels(STAIR_X_CM)}
-        stairY={cmToPixels(STAIR_Y_CM)}
-        stairWidth={cmToPixels(STAIR_DEPTH_CM)}
-        stairHeight={cmToPixels(STAIR_LENGTH_CM)}
-        closetX={cmToPixels(CLOSET_X_CM)}
-        closetY={cmToPixels(CLOSET_Y_CM)}
-        closetWidth={cmToPixels(CLOSET_DEPTH_CM)}
-        closetHeight={cmToPixels(CLOSET_LENGTH_CM)}
-        benchX={cmToPixels(BENCH_X_CM) + WALL_THICKNESS / 2}
-        benchY={cmToPixels(BENCH_Y_CM) + WALL_THICKNESS / 2}
-        benchWidth={cmToPixels(BENCH_LENGTH_CM)}
-        benchHeight={cmToPixels(BENCH_DEPTH_CM)}
-        bench2X={cmToPixels(BENCH2_X_CM) - WALL_THICKNESS / 2}
-        bench2Y={cmToPixels(BENCH2_Y_CM) + WALL_THICKNESS / 2}
-        bench2Width={cmToPixels(BENCH2_DEPTH_CM)}
-        bench2Height={cmToPixels(BENCH2_LENGTH_CM)}
-      />
-      <div className="w-100 flex flex-col items-center gap-y-2 overflow-y-auto h-full">
-        <div className="flex flex-row justify-between w-full">
-          <div className="flex flex-col gap-2">
-            {mode === "pixel" &&
-              activePaletteIndex !== null &&
-              palette[activePaletteIndex] && (
-                <div
-                  className="w-20 h-20 rounded-full border-white border-6 shadow"
-                  style={{ backgroundColor: palette[activePaletteIndex] }}
-                />
+    <>
+      <Dialog
+        open={isNewProjectDialogOpen}
+        onOpenChange={handleDialogOpenChange}
+      >
+        <DialogContent
+          className="max-w-2xl max-h-[90vh] overflow-y-auto"
+          showCloseButton={!isInitialLoad}
+        >
+          <DialogHeader>
+            <DialogTitle>
+              Nouveau projet - Configuration de la palette
+            </DialogTitle>
+            <DialogDescription>
+              Configurez votre palette de couleurs (jusqu'à {MAX_PALETTE_COLORS}{" "}
+              couleurs). Cliquez sur une couleur ci-dessous pour l'ajouter à
+              votre palette.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-2">
+              <Badge>
+                Palette temporaire ({tempPalette.length}/{MAX_PALETTE_COLORS})
+              </Badge>
+              {tempPalette.length > 0 && (
+                <div className="flex flex-wrap gap-2 justify-center">
+                  {tempPalette.map((color, index) => (
+                    <div
+                      key={index}
+                      className="flex flex-col items-center relative"
+                    >
+                      <div
+                        className="w-12 h-12 rounded-full border-4 shadow border-white hover:scale-110 duration-75 cursor-pointer"
+                        style={{ backgroundColor: color }}
+                        onClick={() => {
+                          if (tempPaletteAction === "update") {
+                            setTempUpdatePaletteIndex(index);
+                          }
+                        }}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          handleRemoveFromTempPalette(index);
+                        }}
+                        title={`Couleur ${index + 1}${
+                          tempPaletteAction === "update"
+                            ? " (clic pour mettre à jour)"
+                            : " (clic droit pour supprimer)"
+                        }`}
+                      />
+                      <Label className="text-xs mt-1">{index + 1}</Label>
+                    </div>
+                  ))}
+                </div>
               )}
-            {mode === "joint" && (
-              <div
-                className="w-20 h-20 rounded-full border-white border-6 shadow"
-                style={{ backgroundColor: jointColor }}
-              />
-            )}
-          </div>
-          <div className="flex flex-col gap-2">
-            <Button variant="outline" onClick={reset}>
-              Reset Grille
-            </Button>
-            {mode === "pixel" && (
-              <Button variant="outline" onClick={resetPalette}>
-                Reset Palette
-              </Button>
-            )}
-          </div>
-        </div>
-
-        <div className="flex flex-row gap-2 mb-2">
-          <Button
-            variant="outline"
-            onClick={() => setMode("pixel")}
-            className={mode === "pixel" ? "bg-accent" : ""}
-          >
-            Pixel
-          </Button>
-          <Button
-            variant="outline"
-            onClick={() => setMode("joint")}
-            className={mode === "joint" ? "bg-accent" : ""}
-          >
-            Joint
-          </Button>
-        </div>
-
-        {mode === "pixel" && (
-          <div className="mb-4 w-full">
-            <Badge className="mb-2">
-              Palette ({palette.length}/{MAX_PALETTE_COLORS})
-            </Badge>
-            {palette.length > 0 && (
-              <div className="flex flex-wrap gap-2 justify-center mb-2">
-                {palette.map((color, index) => (
+              <div className="flex flex-row gap-2 justify-center">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    if (tempPaletteAction === "add") {
+                      setTempPaletteAction("none");
+                    } else {
+                      setTempPaletteAction("add");
+                      setTempUpdatePaletteIndex(null);
+                    }
+                  }}
+                  disabled={tempPalette.length >= MAX_PALETTE_COLORS}
+                  className={tempPaletteAction === "add" ? "bg-accent" : ""}
+                >
+                  {tempPaletteAction === "add" ? "Annuler" : "Ajouter"}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    if (tempPaletteAction === "update") {
+                      setTempPaletteAction("add");
+                      setTempUpdatePaletteIndex(null);
+                    } else {
+                      setTempPaletteAction("update");
+                    }
+                  }}
+                  disabled={tempPalette.length === 0}
+                  className={tempPaletteAction === "update" ? "bg-accent" : ""}
+                >
+                  {tempPaletteAction === "update" ? "Annuler" : "Modifier"}
+                </Button>
+              </div>
+              {tempPalette.length === 0 && (
+                <p className="text-xs text-center mt-2 text-gray-500">
+                  Aucune couleur dans la palette. Cliquez sur "Ajouter" puis
+                  sélectionnez une couleur.
+                </p>
+              )}
+            </div>
+            <div className="flex flex-col gap-2">
+              <Badge>
+                {tempPaletteAction === "add"
+                  ? "Sélectionnez une couleur pour l'ajouter à la palette"
+                  : tempPaletteAction === "update"
+                  ? "Sélectionnez une couleur pour mettre à jour"
+                  : "Sélectionnez une action ci-dessus"}
+              </Badge>
+              <div className="grid grid-cols-5 max-h-96 overflow-y-auto">
+                {Object.values(colors).map((color) => (
                   <div
-                    key={index}
-                    className="flex flex-col items-center relative"
+                    key={color.code}
+                    className="flex flex-col items-center m-2"
                   >
                     <div
-                      className={`w-12 h-12 rounded-full border-4 shadow border-white hover:scale-110 duration-75 cursor-pointer ${
-                        activePaletteIndex === index
-                          ? "ring-4 ring-blue-500"
-                          : ""
-                      }`}
-                      style={{ backgroundColor: color }}
-                      onClick={() => {
-                        if (paletteAction === "update") {
-                          setUpdatePaletteIndex(index);
-                        } else {
-                          setActivePaletteIndex(index);
-                          setPaletteAction("none");
-                        }
-                      }}
-                      onContextMenu={(e) => {
-                        e.preventDefault();
-                        removeFromPalette(index);
-                      }}
-                      title={`Couleur ${index + 1}${
-                        paletteAction === "update"
-                          ? " (clic pour mettre à jour)"
-                          : " (clic droit pour supprimer)"
-                      }`}
+                      className="w-10 h-10 rounded-full border-4 shadow border-white hover:scale-110 duration-75 cursor-pointer"
+                      style={{ backgroundColor: color.hexa }}
+                      onClick={() => handleTempColorClick(color.hexa)}
                     />
-                    <Label className="text-xs mt-1">{index + 1}</Label>
+                    <Label className="text-xs mt-2 text-center">
+                      {color.name} {color.code}
+                    </Label>
                   </div>
                 ))}
               </div>
-            )}
-            <div className="flex flex-row gap-2 justify-center">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  if (paletteAction === "add") {
-                    setPaletteAction("none");
-                  } else {
-                    setPaletteAction("add");
-                    setUpdatePaletteIndex(null);
-                  }
-                }}
-                disabled={palette.length >= MAX_PALETTE_COLORS}
-                className={paletteAction === "add" ? "bg-accent" : ""}
-              >
-                {paletteAction === "add" ? "Annuler" : "Ajouter"}
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  if (paletteAction === "update") {
-                    setPaletteAction("none");
-                    setUpdatePaletteIndex(null);
-                  } else {
-                    setPaletteAction("update");
-                  }
-                }}
-                disabled={palette.length === 0}
-                className={paletteAction === "update" ? "bg-accent" : ""}
-              >
-                {paletteAction === "update" ? "Annuler" : "Modifier"}
-              </Button>
             </div>
-            {activePaletteIndex !== null && (
-              <p className="text-xs text-center mt-2">
-                Couleur active: {activePaletteIndex + 1}
-              </p>
-            )}
-            {palette.length === 0 && (
-              <p className="text-xs text-center mt-2 text-gray-500">
-                Aucune couleur dans la palette. Cliquez sur "Ajouter" puis
-                sélectionnez une couleur.
-              </p>
-            )}
           </div>
-        )}
+          <DialogFooter>
+            {!isInitialLoad && (
+              <Button
+                variant="outline"
+                onClick={() => setIsNewProjectDialogOpen(false)}
+              >
+                Annuler
+              </Button>
+            )}
+            <Button
+              onClick={handleValidatePalette}
+              disabled={tempPalette.length === 0}
+            >
+              OK
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={isJointColorDialogOpen}
+        onOpenChange={setIsJointColorDialogOpen}
+      >
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Sélectionner la couleur du joint</DialogTitle>
+            <DialogDescription>
+              Cliquez sur une couleur pour la sélectionner
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid grid-cols-5 gap-4 max-h-96 overflow-y-auto">
+            {Object.values(colors).map((color) => (
+              <div key={color.code} className="flex flex-col items-center">
+                <div
+                  className="w-10 h-10 rounded-full border-4 shadow border-white hover:scale-110 duration-75 cursor-pointer"
+                  style={{ backgroundColor: color.hexa }}
+                  onClick={() => handleJointColorClick(color.hexa)}
+                />
+                <Label className="text-xs mt-2 text-center">
+                  {color.name} {color.code}
+                </Label>
+              </div>
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
+      <div className="flex flex-row h-full gap-2">
+        <Screen
+          grid={grid}
+          setGrid={setGrid}
+          palette={palette}
+          activePaletteIndex={activePaletteIndex}
+          jointColor={jointColor}
+          walls={walls}
+          roomWidth={ROOM_WIDTH_PX}
+          roomHeight={ROOM_HEIGHT_PX}
+          stairX={cmToPixels(STAIR_X_CM)}
+          stairY={cmToPixels(STAIR_Y_CM)}
+          stairWidth={cmToPixels(STAIR_DEPTH_CM)}
+          stairHeight={cmToPixels(STAIR_LENGTH_CM)}
+          closetX={cmToPixels(CLOSET_X_CM)}
+          closetY={cmToPixels(CLOSET_Y_CM)}
+          closetWidth={cmToPixels(CLOSET_DEPTH_CM)}
+          closetHeight={cmToPixels(CLOSET_LENGTH_CM)}
+          benchX={cmToPixels(BENCH_X_CM) + WALL_THICKNESS / 2}
+          benchY={cmToPixels(BENCH_Y_CM) + WALL_THICKNESS / 2}
+          benchWidth={cmToPixels(BENCH_LENGTH_CM)}
+          benchHeight={cmToPixels(BENCH_DEPTH_CM)}
+          bench2X={cmToPixels(BENCH2_X_CM) - WALL_THICKNESS / 2}
+          bench2Y={cmToPixels(BENCH2_Y_CM) + WALL_THICKNESS / 2}
+          bench2Width={cmToPixels(BENCH2_DEPTH_CM)}
+          bench2Height={cmToPixels(BENCH2_LENGTH_CM)}
+        />
+        <div className="w-100 flex flex-col gap-4 overflow-y-auto h-full">
+          {/* Card Nouveau projet */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Nouveau projet</CardTitle>
+              <CardDescription>
+                Réinitialise la grille et la palette
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Button
+                variant="default"
+                onClick={handleNewProject}
+                className="w-full"
+              >
+                Nouveau projet
+              </Button>
+            </CardContent>
+          </Card>
 
-        <Badge>
-          {mode === "joint"
-            ? "Pick joint color"
-            : mode === "pixel" && paletteAction === "add"
-            ? "Sélectionnez une couleur pour l'ajouter à la palette"
-            : mode === "pixel" && paletteAction === "update"
-            ? "Sélectionnez une couleur pour mettre à jour"
-            : "Pick a color"}
-        </Badge>
-        <div className="grid grid-cols-5">
-          {Object.values(colors).map((color) => (
-            <div key={color.code} className="flex flex-col items-center m-4">
-              <div
-                className="w-10 h-10 rounded-full border-4 shadow border-white hover:scale-110 duration-75 cursor-pointer"
-                style={{ backgroundColor: color.hexa }}
-                onClick={() => handleColorClick(color.hexa)}
-              />
-              <Label className="text-xs mt-2 text-center">
-                {color.name} {color.code}
-              </Label>
-            </div>
-          ))}
+          {/* Card Palette */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Palette</CardTitle>
+              <CardDescription>
+                Configurez votre palette de couleurs (jusqu'à{" "}
+                {MAX_PALETTE_COLORS} couleurs)
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4">
+              <Button
+                variant="outline"
+                onClick={handleOpenPaletteDialog}
+                className="w-full"
+              >
+                {palette.length > 0
+                  ? "Actualiser la palette"
+                  : "Définir la palette"}
+              </Button>
+              {palette.length > 0 && (
+                <div className="flex flex-col gap-2">
+                  <Badge className="w-fit">
+                    {palette.length}/{MAX_PALETTE_COLORS} couleurs
+                  </Badge>
+                  <div className="flex flex-wrap gap-2 justify-center">
+                    {palette.map((color, index) => (
+                      <div
+                        key={index}
+                        className="flex flex-col items-center relative"
+                      >
+                        <div
+                          className={`w-12 h-12 rounded-full border-4 shadow border-white hover:scale-110 duration-75 cursor-pointer ${
+                            activePaletteIndex === index
+                              ? "ring-4 ring-blue-500"
+                              : ""
+                          }`}
+                          style={{ backgroundColor: color }}
+                          onClick={() => {
+                            setActivePaletteIndex(index);
+                          }}
+                          title={`Couleur ${index + 1}${
+                            activePaletteIndex === index ? " (active)" : ""
+                          }`}
+                        />
+                        <Label className="text-xs mt-1">{index + 1}</Label>
+                      </div>
+                    ))}
+                  </div>
+                  {activePaletteIndex !== null && (
+                    <p className="text-xs text-center text-muted-foreground">
+                      Couleur active: {activePaletteIndex + 1}
+                    </p>
+                  )}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Card Joint */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Joint</CardTitle>
+              <CardDescription>
+                Cliquez sur la couleur pour la modifier
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4">
+              <div className="flex items-center justify-center">
+                <div
+                  className="w-20 h-20 rounded-full border-white border-6 shadow cursor-pointer hover:scale-110 transition-transform"
+                  style={{ backgroundColor: jointColor }}
+                  onClick={() => setIsJointColorDialogOpen(true)}
+                  title="Cliquez pour changer la couleur du joint"
+                />
+              </div>
+            </CardContent>
+          </Card>
         </div>
       </div>
-    </div>
+    </>
   );
 }
 

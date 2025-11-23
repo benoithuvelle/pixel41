@@ -7,15 +7,12 @@ import {
   STROKE_WIDTH,
 } from "./constants";
 
-type Mode = "pixel" | "joint";
-
 export default function Screen({
   grid,
   palette,
   activePaletteIndex,
   jointColor,
   setGrid,
-  mode,
   walls,
   roomWidth,
   roomHeight,
@@ -41,7 +38,6 @@ export default function Screen({
   activePaletteIndex: number | null;
   jointColor: string;
   setGrid: (grid: Grid) => void;
-  mode: Mode;
   walls: Wall[];
   roomWidth: number;
   roomHeight: number;
@@ -132,7 +128,7 @@ export default function Screen({
   return (
     <svg
       ref={svgRef}
-      className="border h-full w-full"
+      className="border h-full w-full rounded-lg"
       viewBox={`${viewBoxX} ${viewBoxY} ${viewBoxWidth} ${viewBoxHeight}`}
     >
       <defs>
@@ -210,11 +206,7 @@ export default function Screen({
                 stroke={jointColor}
                 strokeWidth={STROKE_WIDTH * 20}
                 onPointerEnter={(e) => {
-                  if (
-                    mode === "pixel" &&
-                    e.buttons === 1 &&
-                    activePaletteIndex !== null
-                  ) {
+                  if (e.buttons === 1 && activePaletteIndex !== null) {
                     const newGrid = { ...grid };
                     newGrid.pixels[rowIndex][columnIndex].paletteIndex =
                       activePaletteIndex;
@@ -222,7 +214,7 @@ export default function Screen({
                   }
                 }}
                 onPointerDown={(e) => {
-                  if (mode === "pixel" && activePaletteIndex !== null) {
+                  if (activePaletteIndex !== null) {
                     e.stopPropagation();
                     const newGrid = { ...grid };
                     newGrid.pixels[rowIndex][columnIndex].paletteIndex =
