@@ -1,54 +1,35 @@
-# React + TypeScript + Vite
+# Calepinage carrelage
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Application web (mobile et ordinateur) pour préparer la pose d'un carrelage : dessin coté de la surface, choix du format et du motif de pose, calepinage précis avec la cote de chaque coupe, et quantités à commander.
 
-Currently, two official plugins are available:
+## Fonctions
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react/README.md) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+- **Surfaces** : sols en vue en plan et murs en élévation (vue de face). Un projet peut regrouper plusieurs surfaces.
+  - Modèles (rectangle, en L, mur droit, sous rampant, pignon) ou tracé libre au doigt/à la souris, avec aimantation sur la grille et à 45°/90°.
+  - Saisie au centimètre de chaque côté (les angles droits sont conservés) ou des coordonnées des points.
+  - Portes, fenêtres, meubles, baignoire… exclus du calepinage ; hauteur carrelée partielle (soubassement, crédence).
+- **Carreau** : formats courants en un clic ou format libre, joint (mm), épaisseur, couleur de joint, conditionnement et prix au m².
+- **Motifs de pose** : droit, décalé (½, ⅓, ¼ ou libre, en rangées ou en colonnes), bâtons rompus, chevron (30–60°), vannerie, hexagone, moulinet (cabochon), opus romain 4 formats. Orientation libre (diagonale à 45°, etc.).
+- **Calepinage** : point de départ (bord, centré, joint centré) dans les deux sens, décalage fin ou glissé à la main, et **optimisation automatique** qui évite les petites coupes. Coupes hachurées, petites coupes en rouge, cote de chaque coupe affichée sur le plan.
+- **Couleurs** : uni, damier, rangées, colonnes, mélange aléatoire pondéré, et peinture carreau par carreau (frises, pixel art). Nuanciers « Classiques » et « Pixel 41zero42 ».
+- **Quantités** : carreaux entiers/coupés, surface, marge de chutes, cartons, budget, mortier de joint, répartition par couleur et par format, liste des coupes, récapitulatif du projet.
+- **Export** : PDF (plan + quantités + liste des coupes, une page par surface et un récapitulatif), image PNG, fichier projet `.json` (import/export). Enregistrement automatique sur l'appareil, annuler/rétablir.
 
-## Expanding the ESLint configuration
+## Utilisation
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default tseslint.config({
-  extends: [
-    // Remove ...tseslint.configs.recommended and replace with this
-    ...tseslint.configs.recommendedTypeChecked,
-    // Alternatively, use this for stricter rules
-    ...tseslint.configs.strictTypeChecked,
-    // Optionally, add this for stylistic rules
-    ...tseslint.configs.stylisticTypeChecked,
-  ],
-  languageOptions: {
-    // other options...
-    parserOptions: {
-      project: ['./tsconfig.node.json', './tsconfig.app.json'],
-      tsconfigRootDir: import.meta.dirname,
-    },
-  },
-})
+```bash
+npm install
+npm run dev      # développement
+npm run build    # version de production dans dist/
+npm test         # tests du moteur de calepinage
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+Gestes : glisser pour se déplacer, pincer ou molette pour zoomer, toucher un côté pour le sélectionner, glisser un point ou une ouverture pour la déplacer. Raccourcis : Ctrl+Z / Ctrl+Maj+Z, Suppr (ouverture sélectionnée), Échap, Entrée (terminer un tracé).
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+## Organisation du code
 
-export default tseslint.config({
-  plugins: {
-    // Add the react-x and react-dom plugins
-    'react-x': reactX,
-    'react-dom': reactDom,
-  },
-  rules: {
-    // other rules...
-    // Enable its recommended typescript rules
-    ...reactX.configs['recommended-typescript'].rules,
-    ...reactDom.configs.recommended.rules,
-  },
-})
-```
+- `src/lib/patterns.ts` : motifs de pose (réseau + motif élémentaire), générés sans trou ni chevauchement (vérifié par les tests).
+- `src/lib/layout.ts` : zone carrelable (contour ∩ bande − ouvertures), découpe des carreaux, statistiques, optimiseur.
+- `src/components/Drawing.tsx` : rendu SVG (plan, cotes, coupes), réutilisé pour l'export.
+- `src/components/Viewport.tsx` : interactions (zoom, pincement, édition, peinture, tracé).
+- `src/components/panels/` : panneaux Surface, Carrelage, Pose, Quantités.

@@ -1,861 +1,512 @@
-import { useState, useEffect, useRef } from "react";
-import { Download } from "lucide-react";
-import jsPDF from "jspdf";
-import { Input } from "./components/ui/input.tsx";
-import { Pencil, Trash2 } from "lucide-react";
-import { Badge } from "./components/ui/badge.tsx";
-import { Button } from "./components/ui/button.tsx";
-import { Label } from "./components/ui/label.tsx";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "./components/ui/card.tsx";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "./components/ui/dialog.tsx";
-import {
-  ACTIVE_PALETTE_INDEX_KEY,
-  // DEFAULT_FILL_COLOR,
-  DEFAULT_STROKE_COLOR,
-  GRID_SIZE,
-  JOINT_COLOR_STORAGE_KEY,
-  MAX_PALETTE_COLORS,
-  PALETTE_STORAGE_KEY,
-  WALL_THICKNESS,
-  PIXEL_SIZE,
-  PIXEL_SIZE_CM,
-} from "./constants.ts";
-import "./App.css";
-import colors from "./colors.ts";
-import Screen from "./Screen.tsx";
+  BarChart3,
+  Brush,
+  Check,
+  FolderOpen,
+  Grid2x2,
+  Hand,
+  LayoutTemplate,
+  Maximize,
+  MousePointer2,
+  PenTool,
+  Plus,
+  Redo2,
+  Ruler,
+  Undo2,
+  X,
+} from "lucide-react";
+import type { Project, Surface, SurfaceKind, Vec } from "@/types";
+import { useProjectStore } from "@/store";
+import { cachedLayout, computeLayout, recolor } from "@/lib/layout";
+import { Viewport, type Tool, type ViewportHandle } from "@/components/Viewport";
+import type { DrawingOptions, Selection } from "@/lib/view";
+import { SurfacePanel } from "@/components/panels/SurfacePanel";
+import { TilePanel } from "@/components/panels/TilePanel";
+import { PosePanel } from "@/components/panels/PosePanel";
+import { QuantitiesPanel } from "@/components/panels/QuantitiesPanel";
+import { IconButton } from "@/components/kit";
+import { ProjectsDialog } from "@/components/ProjectsDialog";
+import { AddSurfaceDialog } from "@/components/AddSurfaceDialog";
+import { cleanRing, isSelfIntersecting, signedArea } from "@/lib/geometry";
+import { normalizeOrigin } from "@/lib/edit";
+import { exportJson, exportPdf, exportPng } from "@/lib/export";
+import { m2, num, uid } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
-const GRID_HEIGHT = 40;
-const GRID_WIDTH = 40;
+type Tab = "surface" | "tile" | "pose" | "qty";
 
-function App() {
-  const gridBase = Array.from({ length: GRID_HEIGHT }, () =>
-    Array.from({ length: GRID_WIDTH }, () => ({
-      paletteIndex: null,
-    }))
+const TABS: { id: Tab; label: string; icon: typeof Ruler }[] = [
+  { id: "surface", label: "Surface", icon: Ruler },
+  { id: "tile", label: "Carrelage", icon: Grid2x2 },
+  { id: "pose", label: "Pose", icon: LayoutTemplate },
+  { id: "qty", label: "Quantités", icon: BarChart3 },
+];
+
+export default function App() {
+  const store = useProjectStore();
+  const { project, update, updateSurface, undo, redo, canUndo, canRedo } = store;
+  const surface = project.surfaces.find((s) => s.id === project.activeId) ?? project.surfaces[0];
+
+  // géométrie recalculée seulement si la forme, le carreau ou la pose changent ; les couleurs à part
+  const deferred = useDeferredValue(surface);
+  const geomKey = JSON.stringify({ ...deferred, colors: null, name: "", margin: 0 });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const geometry = useMemo(() => computeLayout(deferred), [geomKey]);
+  const layout = useMemo(() => recolor(geometry, deferred.colors), [geometry, deferred.colors]);
+
+  const [tab, setTab] = useState<Tab>("surface");
+  const [sheetOpen, setSheetOpen] = useState(true);
+  const [tool, setTool] = useState<Tool>("select");
+  const [paintColor, setPaintColor] = useState(1);
+  const [selection, setSelection] = useState<Selection>({});
+  const [display, setDisplay] = useState<DrawingOptions>({ showCuts: true, showCutLabels: true, showDims: true });
+  const [drawCount, setDrawCount] = useState(0);
+  const [projectsOpen, setProjectsOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+  const vpRef = useRef<ViewportHandle>(null);
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 2600);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  // la peinture vise par défaut une couleur existante
+  useEffect(() => {
+    if (paintColor >= surface.colors.palette.length) setPaintColor(Math.max(0, surface.colors.palette.length - 1));
+  }, [surface.colors.palette.length, paintColor]);
+
+  useEffect(() => {
+    setSelection({});
+    setTool("select");
+  }, [surface.id]);
+
+  const change = useCallback(
+    (fn: (s: Surface) => Surface, tag?: string) => updateSurface(surface.id, fn, tag ? { tag: `${surface.id}:${tag}` } : undefined),
+    [updateSurface, surface.id]
   );
 
-  // État pour gérer la popup de nouveau projet
-  const [isInitialLoad, setIsInitialLoad] = useState<boolean>(() => {
-    const saved = localStorage.getItem(PALETTE_STORAGE_KEY);
-    return !saved || JSON.parse(saved).length === 0;
-  });
-  const [isNewProjectDialogOpen, setIsNewProjectDialogOpen] = useState<boolean>(
-    () => {
-      const saved = localStorage.getItem(PALETTE_STORAGE_KEY);
-      return !saved || JSON.parse(saved).length === 0;
-    }
-  );
-  const [tempPalette, setTempPalette] = useState<string[]>([]);
-  const [tempUpdatePaletteIndex, setTempUpdatePaletteIndex] = useState<
-    number | null
-  >(null);
-
-  // Images d'inspiration pour le configurateur de palette
-  const inspirationImages = [
-    "/41Zero42_Pixel_16_008.jpg",
-    "/41Zero42_Pixel_31_03.jpg",
-    "/41Zero42_Pixel_39_11.jpg",
-  ];
-  const [currentImageIndex, setCurrentImageIndex] = useState<number>(0);
-
-  // Changer l'image toutes les 5 secondes
-  useEffect(() => {
-    if (!isNewProjectDialogOpen) return;
-
-    const interval = setInterval(() => {
-      setCurrentImageIndex((prev) => (prev + 1) % inspirationImages.length);
-    }, 5000);
-
-    return () => clearInterval(interval);
-  }, [isNewProjectDialogOpen, inspirationImages.length]);
-
-  // Palette de couleurs (jusqu'à 8 couleurs)
-  const [palette, setPalette] = useState<string[]>(() => {
-    const saved = localStorage.getItem(PALETTE_STORAGE_KEY);
-    return saved ? JSON.parse(saved) : [];
-  });
-  const [activePaletteIndex, setActivePaletteIndex] = useState<number | null>(
-    () => {
-      const saved = localStorage.getItem(ACTIVE_PALETTE_INDEX_KEY);
-      return saved !== null ? parseInt(saved, 10) : null;
-    }
+  const onViewportChange = useCallback(
+    (fn: (s: Surface) => Surface, first: boolean) => updateSurface(surface.id, fn, { mode: first ? "push" : "merge" }),
+    [updateSurface, surface.id]
   );
 
-  const [jointColor, setJointColor] = useState<string>(() => {
-    const saved = localStorage.getItem(JOINT_COLOR_STORAGE_KEY);
-    return saved || DEFAULT_STROKE_COLOR;
-  });
-  const [isJointColorDialogOpen, setIsJointColorDialogOpen] =
-    useState<boolean>(false);
-  const [isExportAuthorDialogOpen, setIsExportAuthorDialogOpen] =
-    useState<boolean>(false);
-  const [authorName, setAuthorName] = useState<string>("");
-  const screenRef = useRef<SVGSVGElement>(null);
-
-  const [grid, setGrid] = useState<Grid>({
-    width: GRID_SIZE,
-    height: GRID_SIZE,
-    pixels: gridBase,
-  });
-
-  // Murs hardcodés : pièce de 3m15 (315 cm) par 3m71 (371 cm)
-  const cmToPixels = (cm: number): number => {
-    return (cm / PIXEL_SIZE_CM) * PIXEL_SIZE;
-  };
-
-  const ROOM_WIDTH_CM = 315; // 3m15
-  const ROOM_HEIGHT_CM = 371; // 3m71
-  const ROOM_WIDTH_PX = cmToPixels(ROOM_WIDTH_CM);
-  const ROOM_HEIGHT_PX = cmToPixels(ROOM_HEIGHT_CM);
-
-  // Escalier : profondeur 55 cm, longueur 100 cm, en bas à droite
-  const STAIR_DEPTH_CM = 55; // Profondeur depuis le mur de droite
-  const STAIR_LENGTH_CM = 100; // Longueur sur l'axe y depuis le bas
-  const STAIR_X_CM = ROOM_WIDTH_CM - STAIR_DEPTH_CM; // Position x (260 cm)
-  const STAIR_Y_CM = ROOM_HEIGHT_CM - STAIR_LENGTH_CM; // Position y depuis le haut (271 cm)
-
-  // Placard : au fond du couloir, vertical le long du mur de gauche
-  // En haut à gauche, contre le mur de gauche
-  const CLOSET_DEPTH_CM = 40; // Profondeur de 40 cm (largeur du placard)
-  const CLOSET_LENGTH_CM = 84; // Longueur de 60 cm le long du mur de gauche
-  const CLOSET_X_CM = WALL_THICKNESS / 2; // Commence après la moitié de l'épaisseur du mur gauche
-  const CLOSET_Y_CM = WALL_THICKNESS / 2; // Commence après la moitié de l'épaisseur du mur haut (en haut)
-
-  // Banquette : contre le deuxième mur intérieur (125 cm), vers l'escalier
-  const BENCH_LENGTH_CM = 125; // Longueur de 125 cm le long du mur
-  const BENCH_DEPTH_CM = 50; // Profondeur de 50 cm vers l'escalier
-  const BENCH_X_CM = 60 + 130; // Commence après le premier mur (60 cm) + 130 cm de vide = 190 cm
-  const BENCH_Y_CM = 98; // Au niveau du mur intérieur horizontal (98 cm du haut)
-
-  // Deuxième banquette : contre le mur de droite, entre la banquette existante et l'escalier
-  const BENCH2_DEPTH_CM = 50; // Profondeur de 50 cm (comme la première banquette)
-  const BENCH2_START_Y_CM = BENCH_Y_CM + BENCH_DEPTH_CM; // Commence après la fin de la première banquette
-  const BENCH2_END_Y_CM = STAIR_Y_CM; // Se termine au début de l'escalier
-  const BENCH2_LENGTH_CM = BENCH2_END_Y_CM - BENCH2_START_Y_CM; // Longueur calculée
-  const BENCH2_X_CM = ROOM_WIDTH_CM - BENCH2_DEPTH_CM; // Commence à 50 cm du mur de droite
-  const BENCH2_Y_CM = BENCH2_START_Y_CM; // Position y
-
-  // Créer les 4 murs de la pièce
-  const walls: Wall[] = [
-    // Mur bas (horizontal)
-    {
-      x1: 0,
-      y1: -WALL_THICKNESS / 2,
-      x2: ROOM_WIDTH_PX,
-      y2: WALL_THICKNESS / 2,
-      thickness: WALL_THICKNESS,
-    },
-    // Mur droite (vertical)
-    {
-      x1: ROOM_WIDTH_PX - WALL_THICKNESS / 2,
-      y1: 0,
-      x2: ROOM_WIDTH_PX + WALL_THICKNESS / 2,
-      y2: ROOM_HEIGHT_PX,
-      thickness: WALL_THICKNESS,
-    },
-    // Mur haut (horizontal)
-    {
-      x1: 0,
-      y1: ROOM_HEIGHT_PX - WALL_THICKNESS / 2,
-      x2: ROOM_WIDTH_PX,
-      y2: ROOM_HEIGHT_PX + WALL_THICKNESS / 2,
-      thickness: WALL_THICKNESS,
-    },
-    // Mur gauche (vertical)
-    {
-      x1: -WALL_THICKNESS / 2,
-      y1: 0,
-      x2: WALL_THICKNESS / 2,
-      y2: ROOM_HEIGHT_PX,
-      thickness: WALL_THICKNESS,
-    },
-    // Mur intérieur horizontal : 60 cm, part du mur gauche à 98 cm du haut
-    {
-      x1: WALL_THICKNESS / 2,
-      y1: cmToPixels(98) - WALL_THICKNESS / 2,
-      x2: cmToPixels(60) + WALL_THICKNESS / 2,
-      y2: cmToPixels(98) + WALL_THICKNESS / 2,
-      thickness: WALL_THICKNESS,
-    },
-    // Mur intérieur horizontal : part après 130 cm de vide après le premier mur, jusqu'au mur de droite
-    {
-      x1: cmToPixels(60 + 130) - WALL_THICKNESS / 2,
-      y1: cmToPixels(98) - WALL_THICKNESS / 2,
-      x2: ROOM_WIDTH_PX - WALL_THICKNESS / 2,
-      y2: cmToPixels(98) + WALL_THICKNESS / 2,
-      thickness: WALL_THICKNESS,
-    },
-  ];
-
-  // Sauvegarder la couleur des joints dans le localStorage à chaque changement
-  useEffect(() => {
-    localStorage.setItem(JOINT_COLOR_STORAGE_KEY, jointColor);
-  }, [jointColor]);
-
-  // Sauvegarder la palette dans le localStorage à chaque changement
-  useEffect(() => {
-    localStorage.setItem(PALETTE_STORAGE_KEY, JSON.stringify(palette));
-  }, [palette]);
-
-  // Sauvegarder l'index actif de la palette
-  useEffect(() => {
-    if (activePaletteIndex !== null) {
-      localStorage.setItem(
-        ACTIVE_PALETTE_INDEX_KEY,
-        activePaletteIndex.toString()
-      );
-    } else {
-      localStorage.removeItem(ACTIVE_PALETTE_INDEX_KEY);
-    }
-  }, [activePaletteIndex]);
-
-  function handleNewProject() {
-    // Réinitialiser la grille
-    setGrid({
-      width: GRID_SIZE,
-      height: GRID_SIZE,
-      pixels: gridBase,
-    });
-    // Réinitialiser la palette
-    setPalette([]);
-    setActivePaletteIndex(null);
-    setTempPalette([]);
-    setTempUpdatePaletteIndex(null);
-    setIsInitialLoad(false); // Ce n'est plus le chargement initial
-    // Ouvrir la popup
-    setIsNewProjectDialogOpen(true);
-  }
-
-  function handleOpenPaletteDialog() {
-    // Pré-remplir la palette temporaire avec la palette actuelle
-    setTempPalette([...palette]);
-    setTempUpdatePaletteIndex(null);
-    setIsInitialLoad(false);
-    setIsNewProjectDialogOpen(true);
-  }
-
-  function handleTempColorClick(colorHex: string) {
-    // Si on est en mode update, remplacer la couleur
-    if (tempUpdatePaletteIndex !== null) {
-      const newTempPalette = [...tempPalette];
-      newTempPalette[tempUpdatePaletteIndex] = colorHex;
-      setTempPalette(newTempPalette);
-      setTempUpdatePaletteIndex(null);
-    } else {
-      // Sinon, ajouter la couleur si on n'a pas atteint la limite
-      if (tempPalette.length < MAX_PALETTE_COLORS) {
-        setTempPalette([...tempPalette, colorHex]);
-      }
-    }
-  }
-
-  function handleEditPaletteColor(index: number) {
-    // Activer le mode update pour cette couleur
-    setTempUpdatePaletteIndex(index);
-  }
-
-  function handleDeletePaletteColor(index: number) {
-    handleRemoveFromTempPalette(index);
-    // Si on supprime la couleur en cours de modification, annuler le mode update
-    if (tempUpdatePaletteIndex === index) {
-      setTempUpdatePaletteIndex(null);
-    } else if (
-      tempUpdatePaletteIndex !== null &&
-      tempUpdatePaletteIndex > index
-    ) {
-      // Ajuster l'index si on supprime une couleur avant celle en cours de modification
-      setTempUpdatePaletteIndex(tempUpdatePaletteIndex - 1);
-    }
-  }
-
-  function handleRemoveFromTempPalette(index: number) {
-    setTempPalette(tempPalette.filter((_, i) => i !== index));
-  }
-
-  function handleValidatePalette() {
-    if (tempPalette.length === 0) {
-      alert("Veuillez ajouter au moins une couleur à la palette.");
-      return;
-    }
-    setPalette(tempPalette);
-    setActivePaletteIndex(0);
-    setIsInitialLoad(false);
-    setIsNewProjectDialogOpen(false);
-  }
-
-  function handleDialogOpenChange(open: boolean) {
-    // Empêcher la fermeture si c'est le chargement initial et que la palette est vide
-    if (!open && isInitialLoad && tempPalette.length === 0) {
-      return;
-    }
-    setIsNewProjectDialogOpen(open);
-  }
-
-  function handleJointColorClick(colorHex: string) {
-    setJointColor(colorHex);
-    setIsJointColorDialogOpen(false);
-  }
-
-  function calculateColorQuantities() {
-    const quantities: { [color: string]: number } = {};
-    const totalPixels = GRID_HEIGHT * GRID_WIDTH;
-
-    grid.pixels.forEach((row) => {
-      row.forEach((pixel) => {
-        if (pixel.paletteIndex !== null && palette[pixel.paletteIndex]) {
-          const color = palette[pixel.paletteIndex];
-          quantities[color] = (quantities[color] || 0) + 1;
-        }
-      });
-    });
-
-    return { quantities, totalPixels };
-  }
-
-  function handleExportClick() {
-    setIsExportAuthorDialogOpen(true);
-  }
-
-  async function handleExportProject(author: string) {
-    if (!screenRef.current) return;
-
-    const svg = screenRef.current;
-    const { quantities } = calculateColorQuantities();
-
-    // Convertir SVG en image via canvas
-    const svgData = new XMLSerializer().serializeToString(svg);
-    const svgBlob = new Blob([svgData], {
-      type: "image/svg+xml;charset=utf-8",
-    });
-    const svgUrl = URL.createObjectURL(svgBlob);
-
-    const img = new Image();
-
-    img.onload = async () => {
-      // Créer un canvas pour convertir l'image en données
-      const canvas = document.createElement("canvas");
-      canvas.width = img.width;
-      canvas.height = img.height;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) {
-        URL.revokeObjectURL(svgUrl);
+  const onDrawComplete = useCallback(
+    (pts: Vec[]) => {
+      let ring = cleanRing(pts);
+      if (ring.length < 3 || isSelfIntersecting(ring)) {
+        setToast("Contour invalide : les côtés se croisent.");
         return;
       }
-      ctx.drawImage(img, 0, 0);
+      if (signedArea(ring) < 0) ring = ring.slice().reverse();
+      updateSurface(surface.id, (s) => normalizeOrigin({ ...s, outline: ring }));
+      setTool("select");
+      setTab("surface");
+      setTimeout(() => vpRef.current?.fit(), 30);
+    },
+    [updateSurface, surface.id]
+  );
 
-      // Créer le PDF
-      const pdf = new jsPDF({
-        orientation: "landscape",
-        unit: "mm",
-        format: "a4",
-      });
+  const setActive = (id: string) => update((p) => ({ ...p, activeId: id }), { mode: "silent" });
 
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = pdf.internal.pageSize.getHeight();
-      const margin = 10;
-      const contentWidth = pdfWidth - 2 * margin;
-      const contentHeight = pdfHeight - 2 * margin;
+  const addSurface = (s: Surface) => {
+    update((p) => ({ ...p, surfaces: [...p.surfaces, s], activeId: s.id }));
+    setTab("surface");
+  };
 
-      // Calculer les dimensions de l'image pour qu'elle prenne le maximum de place
-      const imgAspectRatio = img.width / img.height;
-      // Utiliser 75% de la largeur disponible pour l'image
-      let imgWidth = contentWidth * 0.75;
-      let imgHeight = imgWidth / imgAspectRatio;
+  const duplicateSurface = () => {
+    const copy: Surface = { ...structuredClone(surface), id: uid(), name: `${surface.name} (copie)` };
+    addSurface(copy);
+  };
 
-      // Si l'image est trop haute, ajuster pour utiliser 80% de la hauteur
-      if (imgHeight > contentHeight * 0.8) {
-        imgHeight = contentHeight * 0.8;
-        imgWidth = imgHeight * imgAspectRatio;
+  const deleteSurface = () => {
+    if (project.surfaces.length <= 1) return;
+    update((p) => {
+      const surfaces = p.surfaces.filter((s) => s.id !== surface.id);
+      return { ...p, surfaces, activeId: surfaces[0].id };
+    });
+  };
+
+  const allLayouts = useMemo(
+    () =>
+      tab === "qty"
+        ? project.surfaces.map((s) => ({ surface: s, layout: s.id === deferred.id ? layout : cachedLayout(s) }))
+        : [],
+    [project.surfaces, layout, deferred.id, tab]
+  );
+
+  const runExport = async (fn: () => Promise<void>) => {
+    setBusy(true);
+    try {
+      await fn();
+    } catch (e) {
+      console.error(e);
+      setToast("Export impossible sur ce navigateur.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // raccourcis clavier
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      const typing = target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable;
+      const mod = e.metaKey || e.ctrlKey;
+      if (mod && e.key.toLowerCase() === "z" && !typing) {
+        e.preventDefault();
+        if (e.shiftKey) redo();
+        else undo();
+        return;
       }
-
-      // Ajouter l'image
-      const imgData = canvas.toDataURL("image/png");
-      pdf.addImage(imgData, "PNG", margin, margin + 15, imgWidth, imgHeight);
-
-      // Ajouter le titre avec le crédit
-      pdf.setFontSize(18);
-      const titleText = `Ce projet a été créé avec amour par ${
-        author || "Anonyme"
-      }`;
-      pdf.text(titleText, pdfWidth / 2, margin + 10, {
-        align: "center",
-      });
-
-      // Constante : nombre de carrelages par boîte
-      const TILES_PER_BOX = 28;
-
-      // Ajouter les statistiques de couleurs
-      const statsX = margin + imgWidth + 10;
-      const statsY = margin + 25;
-      pdf.setFontSize(12);
-      pdf.text("Carrelages utilisés:", statsX, statsY);
-
-      let yPos = statsY + 10;
-      pdf.setFontSize(10);
-
-      const sortedColors = Object.entries(quantities).sort(
-        (a, b) => b[1] - a[1]
-      );
-
-      sortedColors.forEach(([color, count]) => {
-        const colorIndex = palette.indexOf(color);
-        const boxesNeeded = Math.ceil(count / TILES_PER_BOX);
-        const totalTilesIfAllBoxes = boxesNeeded * TILES_PER_BOX;
-
-        // Convertir la couleur hex en RGB pour jsPDF
-        const r = parseInt(color.slice(1, 3), 16);
-        const g = parseInt(color.slice(3, 5), 16);
-        const b = parseInt(color.slice(5, 7), 16);
-
-        // Carré de couleur
-        pdf.setFillColor(r, g, b);
-        pdf.rect(statsX, yPos - 3, 4, 4, "F");
-
-        // Texte
-        pdf.setTextColor(0, 0, 0);
-        pdf.text(`Couleur ${colorIndex + 1}:`, statsX + 6, yPos);
-        yPos += 6;
-        pdf.text(
-          `  ${count} carrelage${count > 1 ? "s" : ""}`,
-          statsX + 6,
-          yPos
-        );
-        yPos += 6;
-        pdf.text(
-          `  ${boxesNeeded} boîte${
-            boxesNeeded > 1 ? "s" : ""
-          } (${totalTilesIfAllBoxes} carrelages)`,
-          statsX + 6,
-          yPos
-        );
-        yPos += 10;
-      });
-
-      // Ajouter les informations sur le joint
-      if (yPos > pdfHeight - 30) {
-        // Si on dépasse, créer une nouvelle page ou ajuster
-        yPos = statsY + 10;
+      if (mod && e.key.toLowerCase() === "y" && !typing) {
+        e.preventDefault();
+        redo();
+        return;
       }
-
-      pdf.setFontSize(12);
-      pdf.text("Joint:", statsX, yPos);
-      yPos += 8;
-      pdf.setFontSize(10);
-
-      // Convertir la couleur du joint hex en RGB
-      const jointR = parseInt(jointColor.slice(1, 3), 16);
-      const jointG = parseInt(jointColor.slice(3, 5), 16);
-      const jointB = parseInt(jointColor.slice(5, 7), 16);
-
-      // Carré de couleur du joint
-      pdf.setFillColor(jointR, jointG, jointB);
-      pdf.rect(statsX, yPos - 3, 4, 4, "F");
-
-      // Texte
-      pdf.setTextColor(0, 0, 0);
-      pdf.text(`Couleur: ${jointColor}`, statsX + 6, yPos);
-
-      // Sauvegarder le PDF
-      pdf.save("projet-pixel41.pdf");
-      URL.revokeObjectURL(svgUrl);
+      if (typing) return;
+      if (e.key === "Escape") {
+        if (tool === "draw") vpRef.current?.cancelDraw();
+        setTool("select");
+        setSelection({});
+      }
+      if (e.key === "Enter" && tool === "draw") vpRef.current?.finishDraw();
+      if ((e.key === "Delete" || e.key === "Backspace") && selection.opening) {
+        const id = selection.opening;
+        change((s) => ({ ...s, openings: s.openings.filter((o) => o.id !== id) }));
+        setSelection({});
+      }
     };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [undo, redo, tool, selection.opening, change]);
 
-    img.onerror = () => {
-      console.error("Erreur lors du chargement de l'image SVG");
-      URL.revokeObjectURL(svgUrl);
-    };
+  const startDraw = () => {
+    setTool("draw");
+    setSheetOpen(false);
+  };
 
-    // Définir la taille de l'image pour une meilleure qualité
-    const svgRect = svg.getBoundingClientRect();
-    img.width = svgRect.width * 2; // 2x pour meilleure qualité
-    img.height = svgRect.height * 2;
-    img.src = svgUrl;
-  }
+  const selectTab = (t: Tab) => {
+    const desktop = window.matchMedia("(min-width: 768px)").matches;
+    if (t === tab && !desktop) setSheetOpen((o) => !o);
+    else {
+      setTab(t);
+      setSheetOpen(true);
+    }
+  };
 
-  return (
+  const invalid = surface.outline.length < 3 || isSelfIntersecting(surface.outline);
+  const warnings = layout.def.warnings;
+
+  const tools: { id: Tool; label: string; icon: typeof Ruler }[] = [
+    { id: "select", label: "Sélection / modifier", icon: MousePointer2 },
+    { id: "move", label: "Glisser la pose", icon: Hand },
+    { id: "paint", label: "Peindre les carreaux", icon: Brush },
+    { id: "draw", label: "Dessiner le contour", icon: PenTool },
+  ];
+
+  const panel = (
     <>
-      <Dialog
-        open={isNewProjectDialogOpen}
-        onOpenChange={handleDialogOpenChange}
-      >
-        <DialogContent
-          className="!max-w-[1400px] w-[95vw] max-h-[90vh] overflow-hidden break-words p-0 flex sm:!max-w-[1400px]"
-          showCloseButton={!isInitialLoad}
-        >
-          <div className="flex flex-row w-full h-full min-h-[600px]">
-            {/* Côté gauche : Images d'inspiration */}
-            <div className="w-1/2 relative overflow-hidden bg-muted min-h-full">
-              <div className="absolute inset-0">
-                {inspirationImages.map((img, index) => (
-                  <img
-                    key={img}
-                    src={img}
-                    alt={`Inspiration ${index + 1}`}
-                    className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-1000 ${
-                      index === currentImageIndex ? "opacity-100" : "opacity-0"
-                    }`}
-                  />
-                ))}
-              </div>
-            </div>
-
-            {/* Côté droit : Configuration de la palette */}
-            <div className="w-1/2 flex flex-col p-6 overflow-y-auto">
-              <DialogHeader>
-                <DialogTitle>
-                  Nouveau projet - Configuration de la palette
-                </DialogTitle>
-                <DialogDescription>
-                  Cliquez sur une couleur pour l'ajouter à votre palette
-                  (jusqu'à {MAX_PALETTE_COLORS} couleurs). Survolez une couleur
-                  de la palette pour voir les options de modification et
-                  suppression.
-                </DialogDescription>
-              </DialogHeader>
-              <div className="flex flex-col gap-4 w-full mt-4">
-                <div className="flex flex-col gap-2 w-full">
-                  <Badge>
-                    Palette temporaire ({tempPalette.length}/
-                    {MAX_PALETTE_COLORS})
-                  </Badge>
-                  {tempPalette.length > 0 && (
-                    <div className="flex flex-wrap gap-2 justify-center">
-                      {tempPalette.map((color, index) => (
-                        <div
-                          key={index}
-                          className="flex flex-col items-center relative group"
-                        >
-                          <div
-                            className={`w-12 h-12 rounded-full border-4 shadow border-white hover:scale-110 duration-75 relative ${
-                              tempUpdatePaletteIndex === index
-                                ? "palette-color-updating"
-                                : ""
-                            }`}
-                            style={{ backgroundColor: color }}
-                          >
-                            {/* Icône crayon (gauche) */}
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleEditPaletteColor(index);
-                              }}
-                              className="absolute -left-1 -top-1 bg-background border border-border rounded-full p-1 shadow-md opacity-0 group-hover:opacity-100 transition-opacity hover:bg-accent z-10"
-                              title="Modifier cette couleur"
-                            >
-                              <Pencil className="w-3 h-3 text-foreground" />
-                            </button>
-                            {/* Icône corbeille (droite) */}
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleDeletePaletteColor(index);
-                              }}
-                              className="absolute -right-1 -top-1 bg-background border border-border rounded-full p-1 shadow-md opacity-0 group-hover:opacity-100 transition-opacity hover:border-destructive z-10"
-                              title="Supprimer cette couleur"
-                            >
-                              <Trash2 className="w-3 h-3 text-foreground hover:text-destructive transition-colors" />
-                            </button>
-                          </div>
-                          <Label className="text-xs mt-1">{index + 1}</Label>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  {tempPalette.length === 0 && (
-                    <p className="text-xs text-center mt-2 text-gray-500">
-                      Aucune couleur dans la palette. Cliquez sur une couleur
-                      ci-dessous pour l'ajouter.
-                    </p>
-                  )}
-                </div>
-                <div className="flex flex-col gap-2 w-full min-w-0">
-                  <Badge className="break-words whitespace-normal text-wrap w-full max-w-full !whitespace-normal !w-full">
-                    {tempUpdatePaletteIndex !== null
-                      ? "Sélectionnez une nouvelle couleur pour remplacer la couleur en cours de modification"
-                      : tempPalette.length >= MAX_PALETTE_COLORS
-                      ? `Palette complète (${MAX_PALETTE_COLORS} couleurs)`
-                      : "Cliquez sur une couleur pour l'ajouter à la palette"}
-                  </Badge>
-                  <div className="grid grid-cols-5 max-h-96 overflow-y-auto">
-                    {Object.values(colors).map((color) => (
-                      <div
-                        key={color.code}
-                        className="flex flex-col items-center m-2"
-                      >
-                        <div
-                          className="w-10 h-10 rounded-full border-4 shadow border-white hover:scale-110 duration-75 cursor-pointer"
-                          style={{ backgroundColor: color.hexa }}
-                          onClick={() => handleTempColorClick(color.hexa)}
-                        />
-                        <Label className="text-xs mt-2 text-center break-words hyphens-auto max-w-full">
-                          {color.name} {color.code}
-                        </Label>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-              <DialogFooter className="mt-4">
-                {!isInitialLoad && (
-                  <Button
-                    variant="outline"
-                    onClick={() => setIsNewProjectDialogOpen(false)}
-                  >
-                    Annuler
-                  </Button>
-                )}
-                <Button
-                  onClick={handleValidatePalette}
-                  disabled={tempPalette.length === 0}
-                >
-                  OK
-                </Button>
-              </DialogFooter>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
-      <Dialog
-        open={isJointColorDialogOpen}
-        onOpenChange={setIsJointColorDialogOpen}
-      >
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>Sélectionner la couleur du joint</DialogTitle>
-            <DialogDescription>
-              Cliquez sur une couleur pour la sélectionner
-            </DialogDescription>
-          </DialogHeader>
-          <div className="grid grid-cols-5 gap-4 max-h-96 overflow-y-auto">
-            {Object.values(colors).map((color) => (
-              <div key={color.code} className="flex flex-col items-center">
-                <div
-                  className="w-10 h-10 rounded-full border-4 shadow border-white hover:scale-110 duration-75 cursor-pointer"
-                  style={{ backgroundColor: color.hexa }}
-                  onClick={() => handleJointColorClick(color.hexa)}
-                />
-                <Label className="text-xs mt-2 text-center">
-                  {color.name} {color.code}
-                </Label>
-              </div>
-            ))}
-          </div>
-        </DialogContent>
-      </Dialog>
-      <Dialog
-        open={isExportAuthorDialogOpen}
-        onOpenChange={setIsExportAuthorDialogOpen}
-      >
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Nom de l'auteur</DialogTitle>
-            <DialogDescription>
-              Entrez votre nom pour l'inclure dans l'export du projet
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex flex-col gap-4 py-4">
-            <Input
-              placeholder="Votre nom"
-              value={authorName}
-              onChange={(e) => setAuthorName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && authorName.trim()) {
-                  handleExportProject(authorName.trim());
-                  setIsExportAuthorDialogOpen(false);
-                  setAuthorName("");
-                }
-              }}
-              autoFocus
-            />
-          </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => {
-                setIsExportAuthorDialogOpen(false);
-                setAuthorName("");
-              }}
-            >
-              Annuler
-            </Button>
-            <Button
-              onClick={() => {
-                if (authorName.trim()) {
-                  handleExportProject(authorName.trim());
-                  setIsExportAuthorDialogOpen(false);
-                  setAuthorName("");
-                }
-              }}
-              disabled={!authorName.trim()}
-            >
-              Exporter
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-      <div className="flex flex-row h-full gap-2">
-        <Screen
-          ref={screenRef}
-          grid={grid}
-          setGrid={setGrid}
-          palette={palette}
-          activePaletteIndex={activePaletteIndex}
-          jointColor={jointColor}
-          walls={walls}
-          roomWidth={ROOM_WIDTH_PX}
-          roomHeight={ROOM_HEIGHT_PX}
-          stairX={cmToPixels(STAIR_X_CM)}
-          stairY={cmToPixels(STAIR_Y_CM)}
-          stairWidth={cmToPixels(STAIR_DEPTH_CM)}
-          stairHeight={cmToPixels(STAIR_LENGTH_CM)}
-          closetX={cmToPixels(CLOSET_X_CM)}
-          closetY={cmToPixels(CLOSET_Y_CM)}
-          closetWidth={cmToPixels(CLOSET_DEPTH_CM)}
-          closetHeight={cmToPixels(CLOSET_LENGTH_CM)}
-          benchX={cmToPixels(BENCH_X_CM) + WALL_THICKNESS / 2}
-          benchY={cmToPixels(BENCH_Y_CM) + WALL_THICKNESS / 2}
-          benchWidth={cmToPixels(BENCH_LENGTH_CM)}
-          benchHeight={cmToPixels(BENCH_DEPTH_CM)}
-          bench2X={cmToPixels(BENCH2_X_CM) - WALL_THICKNESS / 2}
-          bench2Y={cmToPixels(BENCH2_Y_CM) + WALL_THICKNESS / 2}
-          bench2Width={cmToPixels(BENCH2_DEPTH_CM)}
-          bench2Height={cmToPixels(BENCH2_LENGTH_CM)}
+      {tab === "surface" && (
+        <SurfacePanel
+          surface={surface}
+          change={change}
+          selection={selection}
+          onSelect={setSelection}
+          onDraw={startDraw}
+          onFit={() => vpRef.current?.fit()}
+          onDuplicate={duplicateSurface}
+          onDelete={deleteSurface}
+          canDelete={project.surfaces.length > 1}
         />
-        <div className="w-100 flex flex-col gap-4 overflow-y-auto h-full">
-          {/* Card Nouveau projet */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Nouveau projet</CardTitle>
-              <CardDescription>
-                Réinitialise la grille et la palette
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Button
-                variant="default"
-                onClick={handleNewProject}
-                className="w-full"
-              >
-                Nouveau projet
-              </Button>
-            </CardContent>
-          </Card>
-
-          {/* Card Palette */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Palette</CardTitle>
-              <CardDescription>
-                Configurez votre palette de couleurs (jusqu'à{" "}
-                {MAX_PALETTE_COLORS} couleurs)
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-4">
-              <Button
-                variant="outline"
-                onClick={handleOpenPaletteDialog}
-                className="w-full"
-              >
-                {palette.length > 0
-                  ? "Actualiser la palette"
-                  : "Définir la palette"}
-              </Button>
-              {palette.length > 0 && (
-                <div className="flex flex-col gap-2">
-                  <Badge className="w-fit">
-                    {palette.length}/{MAX_PALETTE_COLORS} couleurs
-                  </Badge>
-                  <div className="flex flex-wrap gap-2 justify-center">
-                    {palette.map((color, index) => (
-                      <div
-                        key={index}
-                        className="flex flex-col items-center relative"
-                      >
-                        <div
-                          className={`w-12 h-12 rounded-full border-4 shadow border-white hover:scale-110 duration-75 cursor-pointer ${
-                            activePaletteIndex === index
-                              ? "ring-4 ring-blue-500"
-                              : ""
-                          }`}
-                          style={{ backgroundColor: color }}
-                          onClick={() => {
-                            setActivePaletteIndex(index);
-                          }}
-                          title={`Couleur ${index + 1}${
-                            activePaletteIndex === index ? " (active)" : ""
-                          }`}
-                        />
-                        <Label className="text-xs mt-1">{index + 1}</Label>
-                      </div>
-                    ))}
-                  </div>
-                  {activePaletteIndex !== null && (
-                    <p className="text-xs text-center text-muted-foreground">
-                      Couleur active: {activePaletteIndex + 1}
-                    </p>
-                  )}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          {/* Card Joint */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Joint</CardTitle>
-              <CardDescription>
-                Cliquez sur la couleur pour la modifier
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-4">
-              <div className="flex items-center justify-center">
-                <div
-                  className="w-20 h-20 rounded-full border-white border-6 shadow cursor-pointer hover:scale-110 transition-transform"
-                  style={{ backgroundColor: jointColor }}
-                  onClick={() => setIsJointColorDialogOpen(true)}
-                  title="Cliquez pour changer la couleur du joint"
-                />
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Card Export */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Export</CardTitle>
-              <CardDescription>
-                Exportez votre projet en PDF avec les statistiques
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Button
-                variant="default"
-                onClick={handleExportClick}
-                className="w-full"
-                disabled={palette.length === 0}
-              >
-                <Download className="w-4 h-4 mr-2" />
-                Exporter le projet
-              </Button>
-            </CardContent>
-          </Card>
-        </div>
-      </div>
+      )}
+      {tab === "tile" && (
+        <TilePanel
+          surface={surface}
+          change={change}
+          tool={tool}
+          setTool={setTool}
+          paintColor={paintColor}
+          setPaintColor={setPaintColor}
+        />
+      )}
+      {tab === "pose" && (
+        <PosePanel
+          surface={surface}
+          change={change}
+          tool={tool}
+          setTool={setTool}
+          display={display}
+          setDisplay={setDisplay}
+          warnings={warnings}
+        />
+      )}
+      {tab === "qty" && (
+        <QuantitiesPanel
+          project={project}
+          surface={surface}
+          layout={layout}
+          allLayouts={allLayouts}
+          change={change}
+          busy={busy}
+          onExportPdf={(all) =>
+            runExport(() => exportPdf(project, all ? project.surfaces.map((s) => s.id) : [surface.id], display))
+          }
+          onExportPng={() => runExport(() => exportPng(surface, layout, display, project.name))}
+          onExportJson={() => exportJson(project)}
+        />
+      )}
     </>
   );
-}
 
-export default App;
+  return (
+    <div className="flex h-dvh flex-col overflow-hidden bg-background text-foreground">
+      {/* barre supérieure */}
+      <header className="flex h-12 shrink-0 items-center gap-1 border-b bg-white px-2 pt-[env(safe-area-inset-top)] sm:gap-2 sm:px-3">
+        <button
+          type="button"
+          onClick={() => setProjectsOpen(true)}
+          className="flex min-w-0 items-center gap-2 rounded-md px-1.5 py-1 hover:bg-muted"
+          title="Projets"
+        >
+          <span className="grid size-7 shrink-0 grid-cols-2 gap-px overflow-hidden rounded-md bg-zinc-800 p-[3px]">
+            <span className="rounded-[1px] bg-amber-200" />
+            <span className="rounded-[1px] bg-zinc-200" />
+            <span className="rounded-[1px] bg-zinc-200" />
+            <span className="rounded-[1px] bg-amber-200" />
+          </span>
+          <span className="hidden max-w-40 truncate text-sm font-semibold sm:inline">{project.name}</span>
+          <FolderOpen className="hidden size-4 shrink-0 text-muted-foreground sm:inline md:hidden" />
+        </button>
+        <div className="mx-1 hidden h-6 w-px bg-border sm:block" />
+        <select
+          value={surface.id}
+          onChange={(e) => setActive(e.target.value)}
+          className="h-9 min-w-0 flex-1 rounded-md border bg-white px-2 text-base font-medium sm:max-w-64 sm:flex-none sm:text-sm"
+          aria-label="Surface"
+        >
+          {project.surfaces.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.kind === "floor" ? "▦ " : "▥ "}
+              {s.name}
+            </option>
+          ))}
+        </select>
+        <IconButton title="Ajouter une surface (sol ou mur)" onClick={() => setAddOpen(true)}>
+          <Plus className="size-5" />
+        </IconButton>
+        <div className="hidden flex-1 sm:block" />
+        <IconButton title="Annuler" onClick={undo} disabled={!canUndo}>
+          <Undo2 className="size-5" />
+        </IconButton>
+        <IconButton title="Rétablir" onClick={redo} disabled={!canRedo}>
+          <Redo2 className="size-5" />
+        </IconButton>
+      </header>
+
+      <div className="flex min-h-0 flex-1 flex-col md:flex-row">
+        {/* zone de dessin */}
+        <div className="relative min-h-0 flex-1">
+          <Viewport
+            ref={vpRef}
+            surface={surface}
+            layout={layout}
+            tool={tool}
+            paintColor={paintColor}
+            selection={selection}
+            onSelect={(sel) => {
+              setSelection(sel);
+              if ((sel.edge !== null && sel.edge !== undefined) || sel.opening) {
+                setTab("surface");
+                setSheetOpen(true);
+              }
+            }}
+            onChange={onViewportChange}
+            onDrawComplete={onDrawComplete}
+            onDrawPointsChange={setDrawCount}
+            {...display}
+          />
+
+          {/* outils */}
+          <div className="absolute left-2 top-2 flex flex-row gap-1 rounded-xl border bg-white/95 p-1 shadow-sm backdrop-blur md:flex-col">
+            {tools.map((t) => (
+              <IconButton
+                key={t.id}
+                title={t.label}
+                active={tool === t.id}
+                onClick={() => {
+                  if (t.id === "draw") startDraw();
+                  else setTool(tool === t.id && t.id !== "select" ? "select" : t.id);
+                }}
+              >
+                <t.icon className="size-[18px]" />
+              </IconButton>
+            ))}
+            <div className="my-1.5 w-px bg-border md:mx-1.5 md:my-0 md:h-px md:w-auto" />
+            <IconButton title="Recadrer" onClick={() => vpRef.current?.fit()}>
+              <Maximize className="size-[18px]" />
+            </IconButton>
+          </div>
+
+          {/* palette de peinture */}
+          {tool === "paint" && (
+            <div className="absolute left-2 right-2 top-14 flex flex-wrap items-center gap-1.5 rounded-xl border bg-white/95 p-1.5 shadow-sm backdrop-blur md:left-16 md:right-auto md:top-2">
+              {surface.colors.palette.map((c, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => setPaintColor(i)}
+                  className={cn("size-8 rounded-md border shadow-sm", paintColor === i && "ring-2 ring-foreground ring-offset-1")}
+                  style={{ background: c }}
+                  title={`Couleur ${i + 1}`}
+                />
+              ))}
+              <button
+                type="button"
+                onClick={() => setPaintColor(-1)}
+                className={cn(
+                  "h-8 rounded-md border bg-white px-2 text-xs font-medium",
+                  paintColor < 0 && "ring-2 ring-foreground ring-offset-1"
+                )}
+              >
+                Gomme
+              </button>
+            </div>
+          )}
+
+          {/* tracé en cours */}
+          {tool === "draw" && (
+            <div className="absolute inset-x-2 bottom-2 mx-auto flex max-w-md flex-wrap items-center justify-center gap-2 rounded-xl border bg-white/95 p-2 text-sm shadow-md backdrop-blur">
+              <span className="px-1 text-muted-foreground">
+                {drawCount === 0
+                  ? "Touchez pour placer le premier angle"
+                  : drawCount < 3
+                    ? `${drawCount} point${drawCount > 1 ? "s" : ""} · continuez`
+                    : `${drawCount} points · touchez le 1er pour fermer`}
+              </span>
+              <div className="flex gap-1.5">
+                {drawCount > 0 && (
+                  <button className="h-8 rounded-md border px-2.5 text-xs font-medium" onClick={() => vpRef.current?.undoDrawPoint()}>
+                    Retirer
+                  </button>
+                )}
+                <button
+                  className="inline-flex h-8 items-center gap-1 rounded-md bg-foreground px-2.5 text-xs font-medium text-background disabled:opacity-40"
+                  disabled={drawCount < 3}
+                  onClick={() => vpRef.current?.finishDraw()}
+                >
+                  <Check className="size-3.5" /> Terminer
+                </button>
+                <button
+                  className="inline-flex h-8 items-center gap-1 rounded-md border px-2.5 text-xs font-medium"
+                  onClick={() => {
+                    vpRef.current?.cancelDraw();
+                    setTool("select");
+                  }}
+                >
+                  <X className="size-3.5" /> Annuler
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* résumé */}
+          {tool !== "draw" && (
+            <button
+              type="button"
+              onClick={() => selectTab("qty")}
+              className="absolute bottom-2 right-2 rounded-lg border bg-white/95 px-2 py-1 text-left text-[11px] leading-tight shadow-sm backdrop-blur md:px-2.5 md:py-1.5 md:text-xs"
+            >
+              <div className="font-semibold tabular-nums">
+                {m2(layout.zoneArea)} m² · {num(layout.total)} carreaux
+              </div>
+              <div className={cn("tabular-nums", layout.small ? "text-red-600" : "text-muted-foreground")}>
+                {num(layout.cut)} coupés{layout.small ? ` · ${num(layout.small)} petites coupes` : ""}
+              </div>
+            </button>
+          )}
+
+          {(invalid || warnings.length > 0 || layout.truncated) && tool !== "draw" && (
+            <div className="pointer-events-none absolute inset-x-2 top-14 mx-auto max-w-sm rounded-lg bg-amber-50/95 px-3 py-1.5 text-center text-xs text-amber-900 shadow-sm md:inset-x-16 md:top-2">
+              {invalid
+                ? "Contour invalide : corrigez les côtés."
+                : layout.truncated
+                  ? "Trop de carreaux : affichage limité."
+                  : warnings[0]}
+            </div>
+          )}
+
+          {toast && (
+            <div className="absolute inset-x-0 top-14 mx-auto w-fit max-w-[90%] rounded-lg bg-zinc-900 px-3 py-2 text-sm text-white shadow-lg">
+              {toast}
+            </div>
+          )}
+        </div>
+
+        {/* panneau : latéral sur ordinateur, tiroir bas sur mobile */}
+        <aside
+          className={cn(
+            "flex min-h-0 shrink-0 flex-col border-t bg-zinc-50 md:h-auto md:w-[380px] md:border-l md:border-t-0",
+            sheetOpen ? "h-[44dvh]" : "h-auto"
+          )}
+        >
+          <nav className="order-2 flex shrink-0 border-t bg-white pb-[env(safe-area-inset-bottom)] md:order-1 md:border-b md:border-t-0 md:pb-0">
+            {TABS.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => selectTab(t.id)}
+                className={cn(
+                  "flex flex-1 flex-col items-center gap-0.5 py-1.5 text-[11px] font-medium transition md:flex-row md:justify-center md:gap-1.5 md:py-2.5 md:text-sm",
+                  tab === t.id && sheetOpen ? "text-foreground" : "text-muted-foreground"
+                )}
+              >
+                <t.icon className={cn("size-5 md:size-4", tab === t.id && sheetOpen && "text-blue-600")} />
+                {t.label}
+              </button>
+            ))}
+          </nav>
+          <div className={cn("order-1 min-h-0 flex-1 overflow-y-auto overscroll-contain md:order-2 md:block", !sheetOpen && "hidden")}>
+            {panel}
+          </div>
+        </aside>
+      </div>
+
+      <ProjectsDialog
+        open={projectsOpen}
+        onOpenChange={setProjectsOpen}
+        project={project}
+        projectId={store.projectId}
+        onRename={(name) => update((p) => ({ ...p, name }), { tag: "pname" })}
+        onLoad={(p: Project, id?: string) => {
+          store.load(p, id);
+          setProjectsOpen(false);
+        }}
+      />
+      <AddSurfaceDialog
+        open={addOpen}
+        onOpenChange={setAddOpen}
+        onCreate={(kind: SurfaceKind, s: Surface) => {
+          // reprend le carrelage de la dernière surface du même type
+          const similar = [...project.surfaces].reverse().find((x) => x.kind === kind);
+          const next = similar
+            ? {
+                ...s,
+                tile: { ...similar.tile },
+                pattern: { ...similar.pattern },
+                colors: { ...similar.colors, paint: {} },
+                layout: { ...similar.layout, offsetX: 0, offsetY: 0 },
+                margin: similar.margin,
+                minCut: similar.minCut,
+              }
+            : s;
+          addSurface(next);
+          setAddOpen(false);
+        }}
+      />
+    </div>
+  );
+}
