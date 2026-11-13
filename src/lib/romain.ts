@@ -49,7 +49,14 @@ const CHEEKY = [
 export const ROMAIN_INTRO = "Salut, c'est Rom. Je passerai de temps en temps pour dire des choses importantes. Ou pas.";
 export const ROMAIN_BACK = "Ça fait 5 minutes. Je suis revenu. Tu m'as manqué aussi.";
 export const ROMAIN_EARLY = "Tu n'as pas tenu 5 minutes. Je le savais.";
-export const ROMAIN_BYE = "D'accord. Je vais compter des joints dans mon coin. 5 minutes.";
+export const ROMAIN_BYE = "D'accord, je te lâche la grappe. 5 minutes, promis.";
+/** …puis il revient quelques secondes plus tard. */
+export const ROMAIN_CHANGE_MIND = [
+  "En fait non. Je te laisse 30 secondes.",
+  "J'ai réfléchi : 5 minutes, c'est long. Je te laisse 30 secondes.",
+  "En fait non. 30 secondes, et c'est déjà généreux.",
+];
+export const ROMAIN_BACK_SHORT = "Voilà, 30 secondes. Tu vois que je sais me tenir.";
 
 interface Context {
   surface: Surface;
