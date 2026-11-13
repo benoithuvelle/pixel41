@@ -330,3 +330,48 @@ export function IconButton({
     </button>
   );
 }
+
+/** Bouton à double appui : le premier arme la confirmation, le second exécute. */
+export function ConfirmButton({
+  onConfirm,
+  title,
+  children,
+  disabled,
+  className,
+}: {
+  onConfirm: () => void;
+  title: string;
+  children: ReactNode;
+  disabled?: boolean;
+  className?: string;
+}) {
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    if (!armed) return;
+    const t = setTimeout(() => setArmed(false), 3000);
+    return () => clearTimeout(t);
+  }, [armed]);
+  return (
+    <button
+      type="button"
+      title={armed ? "Appuyez encore pour confirmer" : title}
+      aria-label={title}
+      disabled={disabled}
+      onClick={(e) => {
+        e.stopPropagation();
+        if (armed) {
+          setArmed(false);
+          onConfirm();
+        } else setArmed(true);
+      }}
+      className={cn(
+        "inline-flex h-8 shrink-0 items-center justify-center gap-1 rounded-md px-2 text-xs font-medium transition disabled:opacity-30 [&_svg]:size-4",
+        armed ? "bg-red-600 text-white" : "text-muted-foreground hover:bg-muted hover:text-foreground",
+        className
+      )}
+    >
+      {children}
+      {armed && <span>Confirmer</span>}
+    </button>
+  );
+}

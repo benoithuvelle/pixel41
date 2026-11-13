@@ -3,7 +3,7 @@ import { FilePlus2, Sparkles, Trash2, Upload } from "lucide-react";
 import type { Project } from "@/types";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "./ui/dialog";
 import { Button } from "./ui/button";
-import { TextField } from "./kit";
+import { ConfirmButton, TextField } from "./kit";
 import { deleteProject, listProjects, type SavedProject } from "@/store";
 import { demoProject, emptyProject, sanitizeProject } from "@/lib/defaults";
 import { cn } from "@/lib/utils";
@@ -89,19 +89,16 @@ export function ProjectsDialog({ open, onOpenChange, project, projectId, onRenam
                   {p.id === projectId ? " · ouvert" : ""}
                 </div>
               </button>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                title="Supprimer"
+              <ConfirmButton
+                title="Supprimer ce projet"
                 disabled={p.id === projectId}
-                onClick={() => {
-                  if (!confirm(`Supprimer le projet « ${p.name} » ?`)) return;
+                onConfirm={() => {
                   deleteProject(p.id);
                   setList(listProjects());
                 }}
               >
                 <Trash2 />
-              </Button>
+              </ConfirmButton>
             </div>
           ))}
         </div>

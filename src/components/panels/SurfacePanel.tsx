@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Copy, DoorOpen, PenTool, Plus, Trash2, AlignHorizontalJustifyCenter, ChevronDown } from "lucide-react";
 import type { Opening, OpeningKind, Surface } from "@/types";
-import { Chip, NumField, Section, Segmented, TextField } from "../kit";
+import { Chip, ConfirmButton, NumField, Section, Segmented, TextField } from "../kit";
 import { Button } from "../ui/button";
 import { bboxOf, dist, isSelfIntersecting } from "@/lib/geometry";
 import { cm, uid } from "@/lib/format";
@@ -96,17 +96,9 @@ export function SurfacePanel({ surface, change, selection, onSelect, onDraw, onF
             <Button variant="ghost" size="icon-sm" title="Dupliquer la surface" onClick={onDuplicate}>
               <Copy />
             </Button>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              title="Supprimer la surface"
-              disabled={!canDelete}
-              onClick={() => {
-                if (confirm(`Supprimer « ${surface.name} » ?`)) onDelete();
-              }}
-            >
+            <ConfirmButton title="Supprimer la surface" disabled={!canDelete} onConfirm={onDelete}>
               <Trash2 />
-            </Button>
+            </ConfirmButton>
           </div>
         }
       >
