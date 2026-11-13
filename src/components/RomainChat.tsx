@@ -3,15 +3,30 @@ import { X } from "lucide-react";
 import avatar from "@/assets/romain-avatar.jpg";
 import type { Surface } from "@/types";
 import type { LayoutResult } from "@/lib/layout";
-import { ROMAIN_BACK, ROMAIN_BYE, ROMAIN_EARLY, ROMAIN_INTRO, nextLine } from "@/lib/romain";
+import {
+  ROMAIN_BACK,
+  ROMAIN_BACK_SHORT,
+  ROMAIN_BYE,
+  ROMAIN_CHANGE_MIND,
+  ROMAIN_EARLY,
+  ROMAIN_INTRO,
+  nextLine,
+} from "@/lib/romain";
 import { cn } from "@/lib/utils";
 import { isEmbedded, isStandalone } from "@/lib/install";
 
 const MUTE_KEY = "calepinage:rom-silence-jusqua";
 const EVERY = 60_000;
 const PAUSE = 5 * 60_000;
-const SHOW_FOR = 13_000;
+const SHORT_PAUSE = 30_000;
+/** délai avant que Rom ne change d'avis */
+const CHANGE_MIND_AFTER = 6_000;
 const INSTALL_LINE = "Tu sais que tu peux m'installer sur ton téléphone ? Comme ça, je suis toujours dans ta poche.";
+
+/** normal : réplique avec le bouton « lâche-moi » ; bye / backtrack : Rom part ou se ravise ; install : propose l'installation */
+type Kind = "normal" | "bye" | "backtrack" | "install";
+
+const SHOW_FOR: Record<Kind, number> = { normal: 13_000, install: 13_000, bye: 3_500, backtrack: 7_000 };
 
 function readMute(): number {
   try {
@@ -39,8 +54,7 @@ interface Props {
 
 /** Romain, en bas à gauche du plan, qui parle toutes les minutes. */
 export function RomainChat({ surface, layout, tool, onInstall }: Props) {
-  const [line, setLine] = useState<{ text: string; id: number; bye?: boolean; install?: boolean } | null>(null);
-  const askedInstall = useRef(false);
+  const [line, setLine] = useState<{ text: string; id: number; kind: Kind } | null>(null);
   const [muteUntil, setMuteUntil] = useState(readMute);
   const [now, setNow] = useState(Date.now());
   const ctx = useRef({ surface, layout, tool });
@@ -49,17 +63,34 @@ export function RomainChat({ surface, layout, tool, onInstall }: Props) {
   const muteRef = useRef(muteUntil);
   muteRef.current = muteUntil;
   const counter = useRef(0);
+  const askedInstall = useRef(false);
+  const shortPause = useRef(false);
+  const mindTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const backtracks = useRef(0);
 
-  const say = useCallback((text?: string, bye = false) => {
-    // une fois par session, Rom propose de s'installer sur l'appareil
-    if (!text && counter.current >= 1 && !askedInstall.current && !isStandalone() && !isEmbedded()) {
-      askedInstall.current = true;
-      setLine({ text: INSTALL_LINE, id: ++counter.current, install: true });
-      return;
-    }
-    const t = text ?? nextLine(ctx.current, recent.current);
-    recent.current = [...recent.current.slice(-8), t];
-    setLine({ text: t, id: ++counter.current, bye });
+  const show = useCallback((text: string, kind: Kind) => {
+    setLine({ text, id: ++counter.current, kind });
+  }, []);
+
+  const say = useCallback(
+    (text?: string) => {
+      // une fois par session, Rom propose de s'installer sur l'appareil
+      if (!text && counter.current >= 1 && !askedInstall.current && !isStandalone() && !isEmbedded()) {
+        askedInstall.current = true;
+        show(INSTALL_LINE, "install");
+        return;
+      }
+      const t = text ?? nextLine(ctx.current, recent.current);
+      recent.current = [...recent.current.slice(-8), t];
+      show(t, "normal");
+    },
+    [show]
+  );
+
+  const pauseUntil = useCallback((until: number) => {
+    setMuteUntil(until);
+    setNow(Date.now());
+    writeMute(until);
   }, []);
 
   // présentation peu après l'arrivée, puis une réplique par minute
@@ -73,53 +104,68 @@ export function RomainChat({ surface, layout, tool, onInstall }: Props) {
     return () => {
       clearTimeout(first);
       clearInterval(every);
+      if (mindTimer.current) clearTimeout(mindTimer.current);
     };
   }, [say]);
 
-  // retour après la pause de 5 minutes
+  // retour à la fin de la pause
   useEffect(() => {
     const left = muteUntil - Date.now();
     if (left <= 0) return;
     const t = setTimeout(() => {
       setMuteUntil(0);
       writeMute(0);
-      say(ROMAIN_BACK);
+      say(shortPause.current ? ROMAIN_BACK_SHORT : ROMAIN_BACK);
+      shortPause.current = false;
     }, left);
     return () => clearTimeout(t);
   }, [muteUntil, say]);
 
-  // décompte affiché pendant la pause
+  // décompte affiché sur l'avatar pendant la pause
   useEffect(() => {
     if (muteUntil <= Date.now()) return;
-    const t = setInterval(() => setNow(Date.now()), 15_000);
+    const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, [muteUntil]);
 
   // la bulle disparaît seule
   useEffect(() => {
     if (!line) return;
-    const t = setTimeout(() => setLine(null), line.bye ? 3500 : SHOW_FOR);
+    const t = setTimeout(() => setLine(null), SHOW_FOR[line.kind]);
     return () => clearTimeout(t);
   }, [line]);
 
-  const muted = muteUntil > now;
-  const minutesLeft = Math.max(1, Math.ceil((muteUntil - now) / 60_000));
+  const left = Math.max(0, muteUntil - now);
+  const muted = left > 0;
+  const badge = left >= 60_000 ? `${Math.ceil(left / 60_000)}′` : `${Math.ceil(left / 1000)}″`;
+  const leftLabel = left >= 60_000 ? `${Math.ceil(left / 60_000)} min` : `${Math.ceil(left / 1000)} s`;
 
+  /** Rom accepte la pause de 5 minutes… puis se ravise et n'en accorde que 30 secondes. */
   const silence = () => {
-    const until = Date.now() + PAUSE;
-    setMuteUntil(until);
-    setNow(Date.now());
-    writeMute(until);
-    say(ROMAIN_BYE, true);
+    shortPause.current = false;
+    pauseUntil(Date.now() + PAUSE);
+    show(ROMAIN_BYE, "bye");
+    if (mindTimer.current) clearTimeout(mindTimer.current);
+    mindTimer.current = setTimeout(() => {
+      mindTimer.current = null;
+      if (muteRef.current <= Date.now()) return;
+      shortPause.current = true;
+      pauseUntil(Date.now() + SHORT_PAUSE);
+      show(ROMAIN_CHANGE_MIND[backtracks.current++ % ROMAIN_CHANGE_MIND.length], "backtrack");
+    }, CHANGE_MIND_AFTER);
   };
 
   const poke = () => {
     if (muteRef.current > Date.now()) {
-      setMuteUntil(0);
-      writeMute(0);
+      if (mindTimer.current) clearTimeout(mindTimer.current);
+      mindTimer.current = null;
+      shortPause.current = false;
+      pauseUntil(0);
       say(ROMAIN_EARLY);
     } else say();
   };
+
+  const talking = line && (line.kind === "normal" || line.kind === "install" || line.kind === "backtrack");
 
   return (
     <div className="pointer-events-none absolute bottom-2 left-2 z-10 flex flex-col items-start gap-2">
@@ -131,7 +177,7 @@ export function RomainChat({ surface, layout, tool, onInstall }: Props) {
         >
           <div className="mb-1 text-[11px] font-bold tracking-wide text-[var(--w-cobalt)]">Rom</div>
           <p className="font-semibold">{line.text}</p>
-          {line.install && (
+          {line.kind === "install" && (
             <button
               type="button"
               onClick={() => {
@@ -143,7 +189,7 @@ export function RomainChat({ surface, layout, tool, onInstall }: Props) {
               Installer l'app
             </button>
           )}
-          {!line.bye && (
+          {(line.kind === "normal" || line.kind === "install") && (
             <button
               type="button"
               onClick={silence}
@@ -167,21 +213,17 @@ export function RomainChat({ surface, layout, tool, onInstall }: Props) {
         key={`avatar-${line?.id ?? 0}`}
         type="button"
         onClick={poke}
-        title={muted ? `Rom fait une pause (encore ${minutesLeft} min). Touchez pour le réveiller.` : "Rom a quelque chose à dire"}
+        title={muted ? `Rom fait une pause (encore ${leftLabel}). Touchez pour le réveiller.` : "Rom a quelque chose à dire"}
         aria-label={muted ? "Réveiller Rom" : "Faire parler Rom"}
         className={cn(
           "pointer-events-auto relative size-12 rounded-full border-[3px] border-white shadow-md transition hover:scale-105",
-          line && !line.bye && "rom-avatar"
+          talking && "rom-avatar"
         )}
       >
-        <img
-          src={avatar}
-          alt=""
-          className={cn("size-full rounded-full object-cover", muted && "grayscale opacity-70")}
-        />
+        <img src={avatar} alt="" className={cn("size-full rounded-full object-cover", muted && "grayscale opacity-70")} />
         {muted && (
-          <span className="absolute -right-1.5 -top-1.5 rounded-full bg-zinc-900 px-1.5 py-0.5 text-[10px] font-bold leading-none text-white">
-            {minutesLeft}′
+          <span className="absolute -right-1.5 -top-1.5 rounded-full bg-zinc-900 px-1.5 py-0.5 text-[10px] font-bold leading-none text-white tabular-nums">
+            {badge}
           </span>
         )}
       </button>
