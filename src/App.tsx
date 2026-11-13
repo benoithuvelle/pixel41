@@ -256,7 +256,7 @@ export default function App() {
             runExport(() => exportPdf(project, all ? project.surfaces.map((s) => s.id) : [surface.id], display))
           }
           onExportPng={() => runExport(() => exportPng(surface, layout, display, project.name))}
-          onExportJson={() => exportJson(project)}
+          onExportJson={() => runExport(() => exportJson(project))}
         />
       )}
     </>

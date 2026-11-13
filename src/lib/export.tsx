@@ -35,7 +35,36 @@ export function svgToCanvas(svg: string, w: number, h: number): Promise<HTMLCanv
   });
 }
 
-export function download(blob: Blob, filename: string) {
+interface DownloadsApi {
+  save: (r: { filename: string; data: Blob }) => Promise<{ status: string }>;
+}
+
+/**
+ * Hôte claude.ai (page publiée) : les téléchargements passent par la capacité « downloads ».
+ * Ailleurs, `window.claude` n'existe pas et on retombe sur un lien de téléchargement classique.
+ */
+async function hostDownloads(): Promise<DownloadsApi | null> {
+  const host = (window as unknown as { claude?: { use?: (n: string) => Promise<unknown> } }).claude;
+  if (!host?.use) return null;
+  try {
+    return ((await host.use("downloads")) as DownloadsApi | null) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Propose le fichier ; renvoie false si l'utilisateur a refusé. */
+export async function download(blob: Blob, filename: string): Promise<boolean> {
+  const api = await hostDownloads();
+  if (api) {
+    try {
+      await api.save({ filename, data: blob });
+      return true;
+    } catch (e) {
+      if ((e as { code?: string })?.code === "declined") return false;
+      throw e;
+    }
+  }
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -44,6 +73,7 @@ export function download(blob: Blob, filename: string) {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 4000);
+  return true;
 }
 
 export const safeName = (s: string) =>
@@ -65,12 +95,12 @@ export async function exportPng(surface: Surface, layout: LayoutResult, opts: Dr
   const svg = surfaceSvg(surface, layout, w, h, opts, 2);
   const canvas = await svgToCanvas(svg, w * 2, h * 2);
   const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, "image/png"));
-  if (blob) download(blob, `${safeName(projectName)}-${safeName(surface.name)}.png`);
+  if (blob) await download(blob, `${safeName(projectName)}-${safeName(surface.name)}.png`);
 }
 
-export function exportJson(project: Project) {
+export async function exportJson(project: Project) {
   const blob = new Blob([JSON.stringify(project, null, 2)], { type: "application/json" });
-  download(blob, `${safeName(project.name)}.calepinage.json`);
+  await download(blob, `${safeName(project.name)}.calepinage.json`);
 }
 
 /** Texte compatible avec les polices standard du PDF (Latin-1). */
@@ -255,5 +285,5 @@ export async function exportPdf(project: Project, surfaceIds: string[], opts: Dr
     pdf.text(t(`Total : ${num(tm2, 2)} m²`), M, y + 4);
   }
 
-  pdf.save(`${safeName(project.name)}.pdf`);
+  await download(pdf.output("blob"), `${safeName(project.name)}.pdf`);
 }
