@@ -1,6 +1,7 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import {
   BarChart3,
+  Download,
   Brush,
   Check,
   FolderOpen,
@@ -27,6 +28,11 @@ import { PosePanel } from "@/components/panels/PosePanel";
 import { QuantitiesPanel } from "@/components/panels/QuantitiesPanel";
 import { IconButton } from "@/components/kit";
 import { ProjectsDialog } from "@/components/ProjectsDialog";
+import { Welcome } from "@/components/Welcome";
+import { RomainChat } from "@/components/RomainChat";
+import { InstallDialog } from "@/components/InstallDialog";
+import { useInstall } from "@/lib/install";
+import romAvatar from "@/assets/romain-avatar.jpg";
 import { AddSurfaceDialog } from "@/components/AddSurfaceDialog";
 import { cleanRing, isSelfIntersecting, signedArea } from "@/lib/geometry";
 import { normalizeOrigin } from "@/lib/edit";
@@ -63,6 +69,9 @@ export default function App() {
   const [display, setDisplay] = useState<DrawingOptions>({ showCuts: true, showCutLabels: true, showDims: true });
   const [drawCount, setDrawCount] = useState(0);
   const [projectsOpen, setProjectsOpen] = useState(false);
+  const [welcome, setWelcome] = useState(true);
+  const [installOpen, setInstallOpen] = useState(false);
+  const install = useInstall();
   const [addOpen, setAddOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -272,13 +281,11 @@ export default function App() {
           className="flex min-w-0 items-center gap-2 rounded-md px-1.5 py-1 hover:bg-muted"
           title="Projets"
         >
-          <span className="grid size-7 shrink-0 grid-cols-2 gap-px overflow-hidden rounded-md bg-zinc-800 p-[3px]">
-            <span className="rounded-[1px] bg-amber-200" />
-            <span className="rounded-[1px] bg-zinc-200" />
-            <span className="rounded-[1px] bg-zinc-200" />
-            <span className="rounded-[1px] bg-amber-200" />
+          <img src={romAvatar} alt="" className="size-8 shrink-0 rounded-full object-cover ring-2 ring-[var(--w-cobalt)]/15" />
+          <span className="hidden flex-col items-start leading-none sm:flex">
+            <span className="text-[15px] [font-family:var(--font-display)]">Calepinage</span>
+            <span className="mt-0.5 max-w-40 truncate text-[11px] font-semibold text-muted-foreground">{project.name}</span>
           </span>
-          <span className="hidden max-w-40 truncate text-sm font-semibold sm:inline">{project.name}</span>
           <FolderOpen className="hidden size-4 shrink-0 text-muted-foreground sm:inline md:hidden" />
         </button>
         <div className="mx-1 hidden h-6 w-px bg-border sm:block" />
@@ -299,6 +306,11 @@ export default function App() {
           <Plus className="size-5" />
         </IconButton>
         <div className="hidden flex-1 sm:block" />
+        {!install.installed && (
+          <IconButton title="Installer l'application" onClick={() => setInstallOpen(true)}>
+            <Download className="size-5" />
+          </IconButton>
+        )}
         <IconButton title="Annuler" onClick={undo} disabled={!canUndo}>
           <Undo2 className="size-5" />
         </IconButton>
@@ -429,6 +441,8 @@ export default function App() {
             </button>
           )}
 
+          {!welcome && tool !== "draw" && <RomainChat surface={surface} layout={layout} tool={tool} onInstall={() => setInstallOpen(true)} />}
+
           {(invalid || warnings.length > 0 || layout.truncated) && tool !== "draw" && (
             <div className="pointer-events-none absolute inset-x-2 top-14 mx-auto max-w-sm rounded-lg bg-amber-50/95 px-3 py-1.5 text-center text-xs text-amber-900 shadow-sm md:inset-x-16 md:top-2">
               {invalid
@@ -475,8 +489,30 @@ export default function App() {
         </aside>
       </div>
 
+      {welcome && (
+        <Welcome
+          onEnter={() => setWelcome(false)}
+          onOpenProjects={() => {
+            setWelcome(false);
+            setProjectsOpen(true);
+          }}
+          onInstall={() => {
+            setWelcome(false);
+            setInstallOpen(true);
+          }}
+        />
+      )}
+      <InstallDialog open={installOpen} onOpenChange={setInstallOpen} />
       <ProjectsDialog
         open={projectsOpen}
+        onInstall={() => {
+          setProjectsOpen(false);
+          setInstallOpen(true);
+        }}
+        onShowWelcome={() => {
+          setProjectsOpen(false);
+          setWelcome(true);
+        }}
         onOpenChange={setProjectsOpen}
         project={project}
         projectId={store.projectId}

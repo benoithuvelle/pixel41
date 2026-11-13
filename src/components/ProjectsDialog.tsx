@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { FilePlus2, Sparkles, Trash2, Upload } from "lucide-react";
+import { Download, FilePlus2, Sparkles, Trash2, Upload } from "lucide-react";
 import type { Project } from "@/types";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "./ui/dialog";
 import { Button } from "./ui/button";
@@ -15,9 +15,11 @@ interface Props {
   projectId: string;
   onRename: (name: string) => void;
   onLoad: (p: Project, id?: string) => void;
+  onShowWelcome: () => void;
+  onInstall: () => void;
 }
 
-export function ProjectsDialog({ open, onOpenChange, project, projectId, onRename, onLoad }: Props) {
+export function ProjectsDialog({ open, onOpenChange, project, projectId, onRename, onLoad, onShowWelcome, onInstall }: Props) {
   const [list, setList] = useState<SavedProject[]>([]);
   const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -102,6 +104,16 @@ export function ProjectsDialog({ open, onOpenChange, project, projectId, onRenam
             </div>
           ))}
         </div>
+        <Button variant="secondary" onClick={onInstall}>
+          <Download /> Installer l'app sur cet appareil
+        </Button>
+        <button
+          type="button"
+          onClick={onShowWelcome}
+          className="mx-auto text-xs font-semibold text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+        >
+          Revoir l'accueil de Romain
+        </button>
       </DialogContent>
     </Dialog>
   );

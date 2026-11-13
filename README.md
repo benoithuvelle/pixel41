@@ -1,4 +1,4 @@
-# Calepinage carrelage
+# Calepinage par Romain
 
 Application web (mobile et ordinateur) pour préparer la pose d'un carrelage : dessin coté de la surface, choix du format et du motif de pose, calepinage précis avec la cote de chaque coupe, et quantités à commander.
 
@@ -15,6 +15,17 @@ Application web (mobile et ordinateur) pour préparer la pose d'un carrelage : d
 - **Quantités** : carreaux entiers/coupés, surface, marge de chutes, cartons, budget, mortier de joint, répartition par couleur et par format, liste des coupes, récapitulatif du projet.
 - **Export** : PDF (plan + quantités + liste des coupes, une page par surface et un récapitulatif), image PNG, fichier projet `.json` (import/export). Enregistrement automatique sur l'appareil, annuler/rétablir.
 
+## Installer l'application
+
+L'app est une application web installable (PWA) qui fonctionne hors ligne une fois ouverte. Depuis l'adresse publique (https://pixel41.vercel.app) :
+
+- **iPhone / iPad** : bouton Partager → « Sur l'écran d'accueil » → Ajouter.
+- **Android** : bouton « Installer l'app » dans l'application, ou menu ⋮ → « Installer l'application ».
+- **Ordinateur (Chrome, Edge)** : icône d'installation dans la barre d'adresse, ou bouton « Installer l'app ».
+- **Mac avec Safari** : Fichier → « Ajouter au Dock ».
+
+Le guide détaillé, adapté à l'appareil, est dans l'application (bouton de téléchargement en haut, accueil ou menu Projets).
+
 ## Utilisation
 
 ```bash
@@ -22,6 +33,7 @@ npm install
 npm run dev      # développement
 npm run build    # version de production dans dist/
 npm test         # tests du moteur de calepinage
+npm run build:single  # application complète en un seul fichier HTML (dist-single/)
 ```
 
 Gestes : glisser pour se déplacer, pincer ou molette pour zoomer, toucher un côté pour le sélectionner, glisser un point ou une ouverture pour la déplacer. Raccourcis : Ctrl+Z / Ctrl+Maj+Z, Suppr (ouverture sélectionnée), Échap, Entrée (terminer un tracé).
